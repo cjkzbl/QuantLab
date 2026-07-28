@@ -3,4 +3,5 @@ __pycache__/
 *.py[cod]
 .venv/
 /public/
+/reports/
 /sma225_daily_curve.png

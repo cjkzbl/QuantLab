@@ -1,108 +1,127 @@
-# QQQ / TQQQ 行情获取
+# QuantLab：QQQ SMA225 / TQQQ 模拟策略
 
-在 `api.txt` 中填写 QuantDash API Key，然后调用：
+这是一个只使用 QQQ 和 TQQQ 后复权日线数据的静态模拟项目。
 
-```python
-from get_data import get_qqq_data, get_tqqq_data
+策略规则：
 
-qqq = get_qqq_data()
-tqqq = get_tqqq_data()
-```
+- 回测首日投入 50 万，并一次性全仓买入 TQQQ；
+- QQQ 当日收盘高于 SMA225，下一交易日开盘持有或全仓买入 TQQQ；
+- QQQ 当日收盘低于 SMA225，下一交易日开盘清仓 TQQQ；
+- 每月首个交易日向现金池投入 1 万元；
+- 空仓后再次出现买入信号时，将现金池资金一次性买入；
+- 默认成本为单边佣金 0.10%、单边滑点 0.20%、卖出附加费 0.10%；
+- 暂不计算资本利得税；
+- 使用相同资金流、长期持有 QQQ 的结果作为基准。
 
-两个函数均返回标的从上市至今的后复权日线 DataFrame。
+## 本地运行
 
-直接运行脚本可获取并保存两个 CSV 文件：
-
-```powershell
-python get_data.py
-```
-
-输出文件为 `qqq_daily.csv` 和 `tqqq_daily.csv`。
-
-也可以自行指定保存文件：
-
-```python
-from get_data import get_qqq_data, save_data
-
-save_data(get_qqq_data(), "my_qqq.csv")
-```
-
-计算简单移动平均线：
-
-```python
-from get_data import load_data
-from strategy import moving_average
-
-qqq = load_data("qqq_daily.csv")
-qqq["ma20"] = moving_average(qqq, window=20)
-```
-
-也可以直接运行策略文件，它会读取 `qqq_daily.csv` 并输出最近的
-收盘价和 20 日均线：
-
-```powershell
-python strategy.py
-```
-
-默认策略使用 QQQ 的 225 日简单移动平均线择时，并交易 TQQQ：
-
-- 初始投入 50 万元并在回测首日全仓买入 TQQQ；
-- QQQ 当日收盘价高于 SMA225，下一交易日开盘全仓买入 TQQQ；
-- QQQ 当日收盘价低于 SMA225，下一交易日开盘清仓 TQQQ；
-- 每月首个交易日向现金池加入 1 万元；
-- 现金池资金在下一次由空仓转为买入时一并投入。
-
-运行策略后还会按照每日回测数据生成 `sma225_daily_curve.png`，曲线包含
-策略总资产、QQQ 基准资产和累计投入。QQQ 基准使用相同资金流：首日投入
-50 万元，之后每月投入 1 万元并买入持有 QQQ。
-
-回测默认使用偏高的交易成本假设：单边佣金 0.10%、单边滑点 0.20%、
-卖出附加费 0.10%，暂不计算资本利得税。策略与 QQQ 基准的期末资产均
-按立即清仓并扣除交易成本后的净值计算。这是压力测试参数，不代表特定
-券商的实际收费。
-
-## 本地模拟仪表盘
-
-使用已有 CSV 构建并启动本地页面：
-
-```powershell
-python local_app.py --serve
-```
-
-浏览器打开 `http://127.0.0.1:8000`。
-
-先获取最新行情再启动：
-
-```powershell
-python local_app.py --refresh --serve
-```
-
-也可以只生成 `public/index.html` 和资金曲线，不启动服务：
+使用仓库现有 CSV 生成报告和静态页面：
 
 ```powershell
 python local_app.py
 ```
 
-API Key 可以保存在不会提交到 GitHub 的 `api.txt` 中，也可以设置环境
-变量 `QUANTDASH_API_KEY`。
+生成后启动本地页面：
 
-## GitHub Actions 自动部署
+```powershell
+python local_app.py --serve
+```
 
-仓库包含 `.github/workflows/deploy-pages.yml`，它会：
+先更新最新行情，再生成和启动：
 
-- 推送到 `main` 时使用仓库内的 CSV 构建并发布页面；
-- 每个美股交易日美东时间 18:30 更新行情并发布；
-- 支持在 Actions 页面手动刷新和发布；
-- 通过 GitHub Pages 提供静态模拟仪表盘。
+```powershell
+python local_app.py --refresh --serve
+```
 
-首次部署：
+浏览器访问 `http://127.0.0.1:8000`。
 
-1. 在 GitHub 创建仓库，并把本项目推送到 `main` 分支。
-2. 打开仓库的 `Settings → Secrets and variables → Actions`。
-3. 新建名为 `QUANTDASH_API_KEY` 的 Repository secret。
-4. 打开 `Settings → Pages`，将 Source 设为 `GitHub Actions`。
-5. 打开 `Actions`，选择 `Update simulation and deploy Pages`，点击
-   `Run workflow`。
+QuantDash API Key 可以写入不会提交到 GitHub 的 `api.txt`，也可以设置环境变量：
 
-`api.txt`、本地生成的 `public` 目录和图片均已加入 `.gitignore`，不会
-上传。GitHub Actions 会在运行时重新生成 Pages 文件。
+```powershell
+$env:QUANTDASH_API_KEY = "你的 API Key"
+```
+
+行情脚本也可以单独运行：
+
+```powershell
+python get_data.py
+```
+
+## 详细账本
+
+运行 `python local_app.py` 后，根目录的 `reports` 文件夹会生成：
+
+| 文件 | 内容 |
+| --- | --- |
+| `summary.json` | 回测日期、最终资产、收益、最大回撤、当前仓位和信号 |
+| `trade_details.csv` | 每笔买卖的信号日、交易日、成交价、股数、佣金、滑点、附加费、现金流和已实现盈亏 |
+| `daily_positions.csv` | 每日现金、股数、平均成本、持仓成本、市值、清算净值、未实现盈亏和仓位比例 |
+| `daily_changes.csv` | QQQ/TQQQ 每日涨跌、策略每日盈亏、收益率、累计收益、回撤、费用和 QQQ 基准 |
+| `daily_full.csv` | 汇总以上字段的完整每日账本 |
+
+静态网站还会生成三个完整明细页面，并提供 CSV 下载：
+
+- `public/reports/trades.html`
+- `public/reports/positions.html`
+- `public/reports/changes.html`
+
+`reports` 和 `public` 都是运行时生成目录，不提交到 Git；GitHub Actions 每次运行时会重新生成。
+
+## GitHub Actions 自动更新
+
+工作流文件是 `.github/workflows/deploy-pages.yml`。
+
+- 推送到 `main`：使用仓库现有 CSV 重新生成并部署；
+- 美东时间周一至周五 18:30：下载最新行情、运行策略、部署 Pages 并发邮件；
+- 手动运行：可以选择是否更新行情、是否发送邮件；
+- 定时任务和手动刷新需要 `QUANTDASH_API_KEY`。
+
+GitHub Pages 地址：
+
+```text
+https://cjkzbl.github.io/QuantLab/
+```
+
+## 配置每日邮件
+
+邮件使用标准 SMTP 发送，密码和地址全部保存在 GitHub Secrets，不写入代码。
+
+打开：
+
+```text
+GitHub 仓库 → Settings → Secrets and variables → Actions
+```
+
+添加以下 Repository secrets：
+
+| Secret | 含义 | 示例 |
+| --- | --- | --- |
+| `SMTP_HOST` | SMTP 服务器 | `smtp.qq.com` |
+| `SMTP_PORT` | SMTP SSL 端口 | `465` |
+| `SMTP_USERNAME` | 发件邮箱账号 | `name@qq.com` |
+| `SMTP_PASSWORD` | SMTP 授权码或应用密码 | 不要使用网页登录密码 |
+| `EMAIL_FROM` | 发件地址，可省略 | `name@qq.com` |
+| `EMAIL_TO` | 收件地址；多个地址用逗号分隔 | `receiver@example.com` |
+
+常见配置：
+
+- QQ 邮箱：`smtp.qq.com`、端口 `465`，密码填写 QQ 邮箱生成的授权码；
+- Gmail：`smtp.gmail.com`、端口 `465`，密码填写 Google 应用专用密码；
+- 其他邮箱：填写服务商提供的 SMTP SSL 地址、端口和授权码。
+
+邮件包含：
+
+- 本次构建和部署状态；
+- 数据日期、策略资产、QQQ 基准、累计投入；
+- 累计收益率、最大回撤、当前仓位和最新信号；
+- 成功构建时附带全部 CSV 账本的 ZIP 压缩包；
+- 本次 GitHub Actions 运行记录链接。
+
+设置完成后，在 Actions 中手动运行一次工作流，并保持：
+
+```text
+refresh = true
+send_email = true
+```
+
+即可同时测试行情刷新、Pages 部署和邮件发送。
