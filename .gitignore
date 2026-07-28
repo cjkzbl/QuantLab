@@ -1,0 +1,6 @@
+api.txt
+__pycache__/
+*.py[cod]
+.venv/
+/public/
+/sma225_daily_curve.png
