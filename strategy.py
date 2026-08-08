@@ -87,7 +87,7 @@ def backtest_qqq_sma_tqqq(
     tqqq_df,
     initial_capital=500_000,
     monthly_contribution=10_000,
-    sma_window=225,
+    sma_window=200,
     commission_rate=0.001,
     slippage_rate=0.002,
     sell_fee_rate=0.001,
@@ -552,7 +552,7 @@ def report_tables(daily):
     return daily[position_columns].copy(), daily[change_columns].copy()
 
 
-def plot_daily_curve(daily, filename="sma225_daily_curve.png"):
+def plot_daily_curve(daily, filename="sma200_daily_curve.png"):
     """绘制策略、QQQ 基准和累计投入的每日曲线，并保存为 PNG。"""
     import matplotlib
 
@@ -571,6 +571,11 @@ def plot_daily_curve(daily, filename="sma225_daily_curve.png"):
         raise ValueError("daily 不能为空")
 
     dates = pd.to_datetime(daily["trade_date"])
+    sma_column = next(
+        (column for column in daily.columns if column.startswith("qqq_sma")),
+        "qqq_sma",
+    )
+    sma_label = sma_column.removeprefix("qqq_sma")
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(dates, daily["total_value"] / 1_000_000, label="Strategy", linewidth=1.5)
     ax.plot(
@@ -585,7 +590,7 @@ def plot_daily_curve(daily, filename="sma225_daily_curve.png"):
         label="Total contributions",
         linewidth=1.2,
     )
-    ax.set_title("QQQ SMA225 Timing Strategy")
+    ax.set_title(f"QQQ SMA{sma_label} Timing Strategy")
     ax.set_xlabel("Date")
     ax.set_ylabel("Value (million)")
     ax.grid(alpha=0.25)

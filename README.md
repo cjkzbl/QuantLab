@@ -1,12 +1,12 @@
-# QuantLab：QQQ SMA225 / TQQQ 模拟策略
+# QuantLab：QQQ SMA200 / TQQQ 模拟策略
 
 这是一个只使用 QQQ 和 TQQQ 后复权日线数据的静态模拟项目。
 
 策略规则：
 
 - 回测首日投入 50 万，并一次性全仓买入 TQQQ；
-- QQQ 当日收盘高于 SMA225，下一交易日开盘持有或全仓买入 TQQQ；
-- QQQ 当日收盘低于 SMA225，下一交易日开盘清仓 TQQQ；
+- QQQ 当日收盘高于 SMA200，下一交易日开盘持有或全仓买入 TQQQ；
+- QQQ 当日收盘低于 SMA200，下一交易日开盘清仓 TQQQ；
 - 每月首个交易日向现金池投入 1 万元；
 - 空仓后再次出现买入信号时，将现金池资金一次性买入；
 - 默认成本为单边佣金 0.10%、单边滑点 0.20%、卖出附加费 0.10%；
@@ -19,6 +19,12 @@
 
 ```powershell
 python local_app.py
+```
+
+默认使用 SMA200。也可以临时指定其他周期进行对比，例如：
+
+```powershell
+python local_app.py --sma-window 225
 ```
 
 生成后启动本地页面：
