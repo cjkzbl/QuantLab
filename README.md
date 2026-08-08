@@ -71,6 +71,11 @@ python get_data.py
 - `public/reports/positions.html`
 - `public/reports/changes.html`
 
+主页包含一张自包含的 Plotly 交互式多面板图：QQQ K线与 SMA200、TQQQ
+K线、策略买卖点、策略和 QQQ 资产曲线、每日涨跌、仓位比例以及两只 ETF
+的成交量。图表支持区间按钮、滚轮缩放、统一悬停、画线标注和 PNG 导出；
+也可以通过 `public/interactive_market_chart.html` 单独全屏打开。
+
 `reports` 和 `public` 都是运行时生成目录，不提交到 Git；GitHub Actions 每次运行时会重新生成。
 
 ## GitHub Actions 自动更新

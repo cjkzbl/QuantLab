@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from get_data import load_data, refresh_and_save_market_data
+from interactive_chart import build_interactive_market_chart
 from strategy import backtest_qqq_sma_tqqq, plot_daily_curve, report_tables
 
 
@@ -207,6 +208,13 @@ def build_dashboard(sma_window=200):
     (PUBLIC_DIR / ".nojekyll").touch()
     chart_filename = f"sma{sma_window}_daily_curve.png"
     plot_daily_curve(daily, PUBLIC_DIR / chart_filename)
+    build_interactive_market_chart(
+        daily,
+        trades,
+        qqq,
+        tqqq,
+        PUBLIC_DIR / "interactive_market_chart.html",
+    )
     save_reports(daily, trades, summary)
 
     latest = daily.iloc[-1]
@@ -230,7 +238,6 @@ def build_dashboard(sma_window=200):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta http-equiv="refresh" content="300">
   <title>QQQ SMA{sma_window} 模拟交易</title>
   <style>
     :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
@@ -243,6 +250,8 @@ def build_dashboard(sma_window=200):
     .links {{ display:flex; flex-wrap:wrap; gap:10px; margin:14px 0; }}
     .links a {{ border:1px solid #1677ff88; border-radius:8px; padding:8px 10px; text-decoration:none; }}
     img {{ width:100%; height:auto; display:block; }}
+    iframe {{ width:100%; height:1320px; border:0; display:block; background:#07111f; border-radius:10px; }}
+    details summary {{ cursor:pointer; padding:8px 0; }}
     table {{ width:100%; border-collapse:collapse; margin-top:12px; font-variant-numeric:tabular-nums; }}
     th,td {{ text-align:right; padding:10px 8px; border-bottom:1px solid color-mix(in srgb,CanvasText 14%,transparent); }}
     th:first-child,td:first-child {{ text-align:left; }}
@@ -251,7 +260,7 @@ def build_dashboard(sma_window=200):
 </head>
 <body>
   <h1>QQQ SMA{sma_window} 模拟交易</h1>
-  <div class="muted">数据截至 {latest.trade_date:%Y-%m-%d} · 页面每 5 分钟自动刷新</div>
+  <div class="muted">数据截至 {latest.trade_date:%Y-%m-%d} · 图表支持缩放、区间选择、悬停明细和图片导出</div>
   <section class="grid" aria-label="模拟账户摘要">
     <div class="card"><div class="label">当前状态</div><div class="value">{signal}</div></div>
     <div class="card"><div class="label">策略资产</div><div class="value">¥{summary["final_value"]:,.2f}</div></div>
@@ -271,7 +280,17 @@ def build_dashboard(sma_window=200):
     <a href="reports/daily_full.csv" download>下载完整每日账本 CSV</a>
     <a href="reports/trade_details.csv" download>下载交易 CSV</a>
   </nav>
-  <section class="card"><img src="{chart_filename}" alt="策略、QQQ基准和累计投入的每日曲线"></section>
+  <section class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div><strong>交互式行情与策略分析</strong><div class="label">滚轮缩放 · 拖动选择 · 双击复位 · 工具栏导出图片</div></div>
+      <a href="interactive_market_chart.html" target="_blank" rel="noopener">全屏打开</a>
+    </div>
+    <iframe src="interactive_market_chart.html" title="QQQ、SMA200、TQQQ和策略交互式分析图"></iframe>
+  </section>
+  <details class="card" style="margin-top:12px">
+    <summary>查看静态资产曲线（备用）</summary>
+    <img src="{chart_filename}" alt="策略、QQQ基准和累计投入的每日曲线">
+  </details>
   <section class="card" style="margin-top:12px">
     <div class="label">最近 10 次模拟交易</div>
     <table>
