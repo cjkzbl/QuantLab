@@ -82,6 +82,48 @@ def _signal(close, sma):
     return "equal_sma"
 
 
+def determine_next_action(latest_signal, current_position, sma_window):
+    """把均线状态与当前仓位转换为下一交易日的实际操作。"""
+    if latest_signal == "above_sma":
+        signal_text = f"QQQ 收盘高于 SMA{sma_window}"
+        if current_position == "cash":
+            return {
+                "signal_text": signal_text,
+                "action": "buy",
+                "action_text": "买入 TQQQ",
+                "reason": "当前空仓，QQQ 收盘高于均线",
+            }
+        return {
+            "signal_text": signal_text,
+            "action": "hold",
+            "action_text": "不动，继续持有 TQQQ",
+            "reason": "当前已持仓，QQQ 收盘仍高于均线",
+        }
+
+    if latest_signal == "below_sma":
+        signal_text = f"QQQ 收盘低于 SMA{sma_window}"
+        if current_position == "TQQQ":
+            return {
+                "signal_text": signal_text,
+                "action": "sell",
+                "action_text": "卖出 TQQQ",
+                "reason": "当前持仓，QQQ 收盘低于均线",
+            }
+        return {
+            "signal_text": signal_text,
+            "action": "hold",
+            "action_text": "不动，继续持有现金",
+            "reason": "当前已空仓，QQQ 收盘仍低于均线",
+        }
+
+    return {
+        "signal_text": f"QQQ 与 SMA{sma_window} 相等或均线尚不可用",
+        "action": "hold",
+        "action_text": "不动",
+        "reason": "没有产生明确的买入或卖出信号",
+    }
+
+
 def backtest_qqq_sma_tqqq(
     qqq_df,
     tqqq_df,
@@ -462,9 +504,26 @@ def backtest_qqq_sma_tqqq(
 
     daily = pd.DataFrame(records)
     trades = pd.DataFrame(trade_records)
-    final_value = float(daily.iloc[-1]["total_value"])
-    qqq_benchmark_final_value = float(daily.iloc[-1]["qqq_benchmark_value"])
+    latest = daily.iloc[-1]
+    final_value = float(latest["total_value"])
+    qqq_benchmark_final_value = float(latest["qqq_benchmark_value"])
     profit = final_value - total_contributions
+
+    current_position = str(latest["position_status"])
+    latest_signal = str(latest["close_signal"])
+    next_decision = determine_next_action(
+        latest_signal,
+        current_position,
+        sma_window,
+    )
+
+    today_action = str(latest["action"])
+    today_action_text = {
+        "initial_buy": "首次买入 TQQQ",
+        "buy": "已买入 TQQQ",
+        "sell": "已卖出 TQQQ",
+        "hold": "今日未交易",
+    }.get(today_action, today_action)
     summary = {
         "start_date": daily.iloc[0]["trade_date"],
         "end_date": daily.iloc[-1]["trade_date"],
@@ -499,8 +558,26 @@ def backtest_qqq_sma_tqqq(
         "max_drawdown": float(daily["drawdown"].min()),
         "buy_count": buy_count,
         "sell_count": sell_count,
-        "current_position": str(daily.iloc[-1]["position_status"]),
-        "latest_signal": str(daily.iloc[-1]["close_signal"]),
+        "current_position": current_position,
+        "latest_signal": latest_signal,
+        "latest_signal_text": next_decision["signal_text"],
+        "latest_qqq_close": float(latest["qqq_close"]),
+        "latest_sma": float(latest[f"qqq_sma{sma_window}"]),
+        "latest_qqq_daily_change": float(latest["qqq_daily_change"]),
+        "latest_tqqq_daily_change": float(latest["tqqq_daily_change"]),
+        "latest_daily_profit": float(latest["daily_profit"]),
+        "latest_daily_return": float(latest["daily_return"]),
+        "latest_qqq_benchmark_daily_profit": float(
+            latest["qqq_benchmark_daily_profit"]
+        ),
+        "latest_qqq_benchmark_daily_return": float(
+            latest["qqq_benchmark_daily_return"]
+        ),
+        "today_action": today_action,
+        "today_action_text": today_action_text,
+        "next_action": next_decision["action"],
+        "next_action_text": next_decision["action_text"],
+        "next_action_reason": next_decision["reason"],
     }
     return daily, trades, summary
 

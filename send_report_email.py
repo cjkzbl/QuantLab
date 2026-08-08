@@ -45,6 +45,10 @@ def _money(value):
     return f"{float(value):,.2f}" if value is not None else "无数据"
 
 
+def _signed_money(value):
+    return f"{float(value):+,.2f}" if value is not None else "无数据"
+
+
 def _percent(value):
     return f"{float(value):+.2%}" if value is not None else "无数据"
 
@@ -78,9 +82,16 @@ def send_email(report_dir, dry_run=False):
     success = build_result == "success" and deploy_result == "success"
     status_text = "成功" if success else "失败"
     data_date = summary.get("end_date", "无数据")
+    next_action_text = summary.get("next_action_text", "无数据")
+    daily_return_text = _percent(summary.get("latest_daily_return"))
 
     message = EmailMessage()
-    message["Subject"] = f"[QuantLab] 每日模拟{status_text} - {data_date}"
+    if success and summary:
+        message["Subject"] = (
+            f"[QuantLab] {data_date}｜{next_action_text}｜当日 {daily_return_text}"
+        )
+    else:
+        message["Subject"] = f"[QuantLab] 每日模拟{status_text} - {data_date}"
     message["From"] = sender
     message["To"] = ", ".join(recipients)
 
@@ -90,13 +101,20 @@ def send_email(report_dir, dry_run=False):
         f"部署状态：{deploy_result}\n"
         f"数据日期：{data_date}\n"
         f"策略参数：SMA{summary.get('sma_window', '无数据')}\n"
+        f"当日策略盈亏：{_signed_money(summary.get('latest_daily_profit'))}\n"
+        f"当日策略收益率：{daily_return_text}\n"
+        f"QQQ 当日涨跌：{_percent(summary.get('latest_qqq_daily_change'))}\n"
+        f"TQQQ 当日涨跌：{_percent(summary.get('latest_tqqq_daily_change'))}\n"
+        f"今日执行动作：{summary.get('today_action_text', '无数据')}\n"
+        f"下一交易日操作：{next_action_text}\n"
+        f"信号依据：{summary.get('next_action_reason', '无数据')}\n"
+        f"均线状态：{summary.get('latest_signal_text', '无数据')}\n"
         f"策略资产：{_money(summary.get('final_value'))}\n"
         f"QQQ 基准：{_money(summary.get('qqq_benchmark_final_value'))}\n"
         f"累计投入：{_money(summary.get('total_contributions'))}\n"
         f"策略累计收益率：{_percent(summary.get('return_rate'))}\n"
         f"最大回撤：{_percent(summary.get('max_drawdown'))}\n"
         f"当前仓位：{summary.get('current_position', '无数据')}\n"
-        f"最新信号：{summary.get('latest_signal', '无数据')}\n"
         f"工作流：{workflow_url or '未提供'}\n"
     )
     message.set_content(text)
@@ -110,13 +128,20 @@ def send_email(report_dir, dry_run=False):
     <tr><td>部署状态</td><td><strong>{deploy_result}</strong></td></tr>
     <tr><td>数据日期</td><td>{data_date}</td></tr>
     <tr><td>策略参数</td><td>SMA{summary.get("sma_window", "无数据")}</td></tr>
+    <tr><td>当日策略盈亏</td><td><strong>{_signed_money(summary.get("latest_daily_profit"))}</strong></td></tr>
+    <tr><td>当日策略收益率</td><td><strong>{daily_return_text}</strong></td></tr>
+    <tr><td>QQQ 当日涨跌</td><td>{_percent(summary.get("latest_qqq_daily_change"))}</td></tr>
+    <tr><td>TQQQ 当日涨跌</td><td>{_percent(summary.get("latest_tqqq_daily_change"))}</td></tr>
+    <tr><td>今日执行动作</td><td>{summary.get("today_action_text", "无数据")}</td></tr>
+    <tr><td>下一交易日操作</td><td><strong style="font-size:18px">{next_action_text}</strong></td></tr>
+    <tr><td>信号依据</td><td>{summary.get("next_action_reason", "无数据")}</td></tr>
+    <tr><td>均线状态</td><td>{summary.get("latest_signal_text", "无数据")}</td></tr>
     <tr><td>策略资产</td><td>{_money(summary.get("final_value"))}</td></tr>
     <tr><td>QQQ 基准</td><td>{_money(summary.get("qqq_benchmark_final_value"))}</td></tr>
     <tr><td>累计投入</td><td>{_money(summary.get("total_contributions"))}</td></tr>
     <tr><td>策略累计收益率</td><td>{_percent(summary.get("return_rate"))}</td></tr>
     <tr><td>最大回撤</td><td>{_percent(summary.get("max_drawdown"))}</td></tr>
     <tr><td>当前仓位</td><td>{summary.get("current_position", "无数据")}</td></tr>
-    <tr><td>最新信号</td><td>{summary.get("latest_signal", "无数据")}</td></tr>
   </table>
   <p><a href="{workflow_url}">查看 GitHub Actions 运行记录</a></p>
   <p>构建成功时，本邮件附件包含全部交易、每日持仓和每日涨跌 CSV。</p>

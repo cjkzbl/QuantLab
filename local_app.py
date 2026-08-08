@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from get_data import get_qqq_data, get_tqqq_data, load_data, save_data
+from get_data import load_data, refresh_and_save_market_data
 from strategy import backtest_qqq_sma_tqqq, plot_daily_curve, report_tables
 
 
@@ -19,8 +19,13 @@ PUBLIC_REPORT_DIR = PUBLIC_DIR / "reports"
 
 def refresh_market_data():
     """重新获取并保存 QQQ、TQQQ 后复权行情。"""
-    save_data(get_qqq_data(), "qqq_daily.csv")
-    save_data(get_tqqq_data(), "tqqq_daily.csv")
+    result = refresh_and_save_market_data(max_age_days=7)
+    print(
+        "两份 CSV 已更新并重新校验："
+        f"最新交易日={result['latest_date']}，"
+        f"QQQ={result['qqq_rows']} 行，TQQQ={result['tqqq_rows']} 行"
+    )
+    return result
 
 
 def _format_value(value, kind):
@@ -253,6 +258,8 @@ def build_dashboard(sma_window=200):
     <div class="card"><div class="label">QQQ 基准</div><div class="value">¥{summary["qqq_benchmark_final_value"]:,.2f}</div></div>
     <div class="card"><div class="label">累计投入</div><div class="value">¥{summary["total_contributions"]:,.2f}</div></div>
     <div class="card"><div class="label">今日策略涨跌</div><div class="value">{latest.daily_return:+.2%}</div></div>
+    <div class="card"><div class="label">今日策略盈亏</div><div class="value">¥{latest.daily_profit:+,.2f}</div></div>
+    <div class="card"><div class="label">下一交易日操作</div><div class="value">{summary["next_action_text"]}</div></div>
     <div class="card"><div class="label">QQQ收盘 / SMA{sma_window}</div><div class="value">{latest.qqq_close:,.2f} / {latest[sma_column]:,.2f}</div></div>
     <div class="card"><div class="label">累计交易成本</div><div class="value">¥{summary["transaction_costs_paid_or_estimated"]:,.2f}</div></div>
     <div class="card"><div class="label">最大回撤</div><div class="value">{summary["max_drawdown"]:.2%}</div></div>
