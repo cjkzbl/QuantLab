@@ -114,10 +114,7 @@ def save_reports(daily, trades, summary):
     (PUBLIC_REPORT_DIR / "summary.json").write_text(summary_text, encoding="utf-8")
 
     sma_column = next(column for column in daily.columns if column.startswith("qqq_sma"))
-<<<<<<< HEAD
     sma_label = f"SMA{summary['sma_window']}"
-=======
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
     _write_table_page(
         "trades.html",
         "全部交易明细",
@@ -128,11 +125,7 @@ def save_reports(daily, trades, summary):
             ("reason", "原因", "text"),
             ("signal_date", "信号日", "date"),
             ("qqq_signal_close", "QQQ信号收盘", "number"),
-<<<<<<< HEAD
             (sma_column, sma_label, "number"),
-=======
-            (sma_column, "SMA225", "number"),
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
             ("tqqq_market_price", "TQQQ开盘价", "number"),
             ("execution_price", "成交价（含滑点）", "number"),
             ("shares", "股数", "shares"),
@@ -175,11 +168,7 @@ def save_reports(daily, trades, summary):
         [
             ("trade_date", "日期", "date"),
             ("qqq_close", "QQQ收盘", "number"),
-<<<<<<< HEAD
             (sma_column, sma_label, "number"),
-=======
-            (sma_column, "SMA225", "number"),
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
             ("qqq_daily_change", "QQQ涨跌", "percent"),
             ("tqqq_close", "TQQQ收盘", "number"),
             ("tqqq_daily_change", "TQQQ涨跌", "percent"),
@@ -199,7 +188,6 @@ def save_reports(daily, trades, summary):
     return positions, changes
 
 
-<<<<<<< HEAD
 def build_dashboard(sma_window=200):
     """运行模拟回测，生成本地报告和静态网页。"""
     qqq = load_data("qqq_daily.csv")
@@ -214,17 +202,6 @@ def build_dashboard(sma_window=200):
     (PUBLIC_DIR / ".nojekyll").touch()
     chart_filename = f"sma{sma_window}_daily_curve.png"
     plot_daily_curve(daily, PUBLIC_DIR / chart_filename)
-=======
-def build_dashboard():
-    """运行模拟回测，生成本地报告和静态网页。"""
-    qqq = load_data("qqq_daily.csv")
-    tqqq = load_data("tqqq_daily.csv")
-    daily, trades, summary = backtest_qqq_sma_tqqq(qqq, tqqq)
-
-    PUBLIC_DIR.mkdir(exist_ok=True)
-    (PUBLIC_DIR / ".nojekyll").touch()
-    plot_daily_curve(daily, PUBLIC_DIR / "sma225_daily_curve.png")
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
     save_reports(daily, trades, summary)
 
     latest = daily.iloc[-1]
@@ -268,11 +245,7 @@ def build_dashboard():
   </style>
 </head>
 <body>
-<<<<<<< HEAD
   <h1>QQQ SMA{sma_window} 模拟交易</h1>
-=======
-  <h1>QQQ SMA225 模拟交易</h1>
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
   <div class="muted">数据截至 {latest.trade_date:%Y-%m-%d} · 页面每 5 分钟自动刷新</div>
   <section class="grid" aria-label="模拟账户摘要">
     <div class="card"><div class="label">当前状态</div><div class="value">{signal}</div></div>
@@ -280,11 +253,7 @@ def build_dashboard():
     <div class="card"><div class="label">QQQ 基准</div><div class="value">¥{summary["qqq_benchmark_final_value"]:,.2f}</div></div>
     <div class="card"><div class="label">累计投入</div><div class="value">¥{summary["total_contributions"]:,.2f}</div></div>
     <div class="card"><div class="label">今日策略涨跌</div><div class="value">{latest.daily_return:+.2%}</div></div>
-<<<<<<< HEAD
     <div class="card"><div class="label">QQQ收盘 / SMA{sma_window}</div><div class="value">{latest.qqq_close:,.2f} / {latest[sma_column]:,.2f}</div></div>
-=======
-    <div class="card"><div class="label">QQQ收盘 / SMA225</div><div class="value">{latest.qqq_close:,.2f} / {latest[sma_column]:,.2f}</div></div>
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
     <div class="card"><div class="label">累计交易成本</div><div class="value">¥{summary["transaction_costs_paid_or_estimated"]:,.2f}</div></div>
     <div class="card"><div class="label">最大回撤</div><div class="value">{summary["max_drawdown"]:.2%}</div></div>
   </section>
@@ -295,11 +264,7 @@ def build_dashboard():
     <a href="reports/daily_full.csv" download>下载完整每日账本 CSV</a>
     <a href="reports/trade_details.csv" download>下载交易 CSV</a>
   </nav>
-<<<<<<< HEAD
   <section class="card"><img src="{chart_filename}" alt="策略、QQQ基准和累计投入的每日曲线"></section>
-=======
-  <section class="card"><img src="sma225_daily_curve.png" alt="策略、QQQ基准和累计投入的每日曲线"></section>
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
   <section class="card" style="margin-top:12px">
     <div class="label">最近 10 次模拟交易</div>
     <table>
@@ -337,11 +302,7 @@ def main():
 
     if args.refresh:
         refresh_market_data()
-<<<<<<< HEAD
     output, summary = build_dashboard(sma_window=args.sma_window)
-=======
-    output, summary = build_dashboard()
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
     print(f"页面已生成：{output.resolve()}")
     print(f"详细账本已生成：{REPORT_DIR.resolve()}")
     print(

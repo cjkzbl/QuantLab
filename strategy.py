@@ -503,7 +503,6 @@ def backtest_qqq_sma_tqqq(
         "latest_signal": str(daily.iloc[-1]["close_signal"]),
     }
     return daily, trades, summary
-<<<<<<< HEAD
 
 
 def report_tables(daily):
@@ -554,58 +553,6 @@ def report_tables(daily):
 
 
 def plot_daily_curve(daily, filename="sma200_daily_curve.png"):
-=======
-
-
-def report_tables(daily):
-    """从完整每日账本拆分出持仓明细与涨跌明细。"""
-    position_columns = [
-        "trade_date",
-        "position_status",
-        "action",
-        "action_reason",
-        "monthly_contribution",
-        "cash",
-        "shares",
-        "average_cost_per_share",
-        "cost_basis",
-        "tqqq_close",
-        "position_market_value",
-        "position_liquidation_value",
-        "unrealized_profit_before_exit_cost",
-        "exposure_ratio",
-        "total_value",
-        "estimated_exit_cost",
-        "estimated_exit_tax",
-    ]
-    change_columns = [
-        "trade_date",
-        "qqq_close",
-        next(column for column in daily.columns if column.startswith("qqq_sma")),
-        "qqq_daily_change",
-        "tqqq_close",
-        "tqqq_daily_change",
-        "close_signal",
-        "next_day_instruction",
-        "total_value",
-        "daily_profit",
-        "daily_return",
-        "cumulative_profit",
-        "cumulative_return",
-        "drawdown",
-        "transaction_cost_today",
-        "transaction_costs_paid",
-        "qqq_benchmark_value",
-        "qqq_benchmark_daily_profit",
-        "qqq_benchmark_daily_return",
-        "qqq_benchmark_cumulative_profit",
-        "qqq_benchmark_cumulative_return",
-    ]
-    return daily[position_columns].copy(), daily[change_columns].copy()
-
-
-def plot_daily_curve(daily, filename="sma225_daily_curve.png"):
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
     """绘制策略、QQQ 基准和累计投入的每日曲线，并保存为 PNG。"""
     import matplotlib
 
@@ -624,14 +571,11 @@ def plot_daily_curve(daily, filename="sma225_daily_curve.png"):
         raise ValueError("daily 不能为空")
 
     dates = pd.to_datetime(daily["trade_date"])
-<<<<<<< HEAD
     sma_column = next(
         (column for column in daily.columns if column.startswith("qqq_sma")),
         "qqq_sma",
     )
     sma_label = sma_column.removeprefix("qqq_sma")
-=======
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(dates, daily["total_value"] / 1_000_000, label="Strategy", linewidth=1.5)
     ax.plot(

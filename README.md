@@ -1,21 +1,12 @@
-<<<<<<< HEAD
 # QuantLab：QQQ SMA200 / TQQQ 模拟策略
-=======
-# QuantLab：QQQ SMA225 / TQQQ 模拟策略
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
 
 这是一个只使用 QQQ 和 TQQQ 后复权日线数据的静态模拟项目。
 
 策略规则：
 
 - 回测首日投入 50 万，并一次性全仓买入 TQQQ；
-<<<<<<< HEAD
 - QQQ 当日收盘高于 SMA200，下一交易日开盘持有或全仓买入 TQQQ；
 - QQQ 当日收盘低于 SMA200，下一交易日开盘清仓 TQQQ；
-=======
-- QQQ 当日收盘高于 SMA225，下一交易日开盘持有或全仓买入 TQQQ；
-- QQQ 当日收盘低于 SMA225，下一交易日开盘清仓 TQQQ；
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
 - 每月首个交易日向现金池投入 1 万元；
 - 空仓后再次出现买入信号时，将现金池资金一次性买入；
 - 默认成本为单边佣金 0.10%、单边滑点 0.20%、卖出附加费 0.10%；
@@ -30,7 +21,6 @@
 python local_app.py
 ```
 
-<<<<<<< HEAD
 默认使用 SMA200。也可以临时指定其他周期进行对比，例如：
 
 ```powershell
@@ -53,24 +43,6 @@ python local_app.py --refresh --serve
 
 QuantDash API Key 可以写入不会提交到 GitHub 的 `api.txt`，也可以设置环境变量：
 
-=======
-生成后启动本地页面：
-
-```powershell
-python local_app.py --serve
-```
-
-先更新最新行情，再生成和启动：
-
-```powershell
-python local_app.py --refresh --serve
-```
-
-浏览器访问 `http://127.0.0.1:8000`。
-
-QuantDash API Key 可以写入不会提交到 GitHub 的 `api.txt`，也可以设置环境变量：
-
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
 ```powershell
 $env:QUANTDASH_API_KEY = "你的 API Key"
 ```

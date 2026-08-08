@@ -89,10 +89,7 @@ def send_email(report_dir, dry_run=False):
         f"构建状态：{build_result}\n"
         f"部署状态：{deploy_result}\n"
         f"数据日期：{data_date}\n"
-<<<<<<< HEAD
         f"策略参数：SMA{summary.get('sma_window', '无数据')}\n"
-=======
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
         f"策略资产：{_money(summary.get('final_value'))}\n"
         f"QQQ 基准：{_money(summary.get('qqq_benchmark_final_value'))}\n"
         f"累计投入：{_money(summary.get('total_contributions'))}\n"
@@ -112,10 +109,7 @@ def send_email(report_dir, dry_run=False):
     <tr><td>构建状态</td><td><strong>{build_result}</strong></td></tr>
     <tr><td>部署状态</td><td><strong>{deploy_result}</strong></td></tr>
     <tr><td>数据日期</td><td>{data_date}</td></tr>
-<<<<<<< HEAD
     <tr><td>策略参数</td><td>SMA{summary.get("sma_window", "无数据")}</td></tr>
-=======
->>>>>>> a72cec78bff35892eaca41bffef6fd208bc5f17e
     <tr><td>策略资产</td><td>{_money(summary.get("final_value"))}</td></tr>
     <tr><td>QQQ 基准</td><td>{_money(summary.get("qqq_benchmark_final_value"))}</td></tr>
     <tr><td>累计投入</td><td>{_money(summary.get("total_contributions"))}</td></tr>
