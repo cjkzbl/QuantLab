@@ -215,6 +215,70 @@ def save_reports(daily, trades, summary):
     return positions, changes
 
 
+def _build_return_heatmap(daily):
+    """按资金流调整后的每日收益率生成月度、季度和年度收益格子。"""
+    returns = daily[["trade_date", "daily_return"]].copy()
+    returns["trade_date"] = pd.to_datetime(returns["trade_date"])
+    returns["daily_return"] = pd.to_numeric(
+        returns["daily_return"], errors="coerce"
+    ).fillna(0.0)
+    returns["year"] = returns["trade_date"].dt.year
+    returns["month"] = returns["trade_date"].dt.month
+    returns["quarter"] = returns["trade_date"].dt.quarter
+
+    def compound(group):
+        return float((1.0 + group).prod() - 1.0)
+
+    monthly = returns.groupby(["year", "month"])["daily_return"].apply(compound)
+    quarterly = returns.groupby(["year", "quarter"])["daily_return"].apply(compound)
+    yearly = returns.groupby("year")["daily_return"].apply(compound)
+    latest_year = int(returns["year"].max())
+    latest_date = returns["trade_date"].max().strftime("%Y-%m-%d")
+
+    def cell(value, period, is_total=False):
+        if value is None:
+            return '<td class="return-cell empty">—</td>'
+        positive = value >= 0
+        rgb = "53,211,153" if positive else "251,113,133"
+        intensity = min(abs(value) / 0.30, 1.0)
+        alpha = 0.10 + intensity * 0.48
+        css_class = "gain" if positive else "loss"
+        if is_total:
+            css_class += " total"
+        return (
+            f'<td class="return-cell {css_class}" '
+            f'style="background:rgba({rgb},{alpha:.3f})" '
+            f'title="{html.escape(period)}：{value:+.4%}">{value:+.1%}</td>'
+        )
+
+    rows = []
+    for year in sorted(yearly.index, reverse=True):
+        month_cells = "".join(
+            cell(monthly.get((year, month)), f"{year}-{month:02d}")
+            for month in range(1, 13)
+        )
+        quarter_cells = "".join(
+            cell(quarterly.get((year, quarter)), f"{year} Q{quarter}", True)
+            for quarter in range(1, 5)
+        )
+        year_label = f"{year} YTD（截至 {latest_date}）" if year == latest_year else str(year)
+        rows.append(
+            f'<tr><th class="year-cell">{year}</th>{month_cells}{quarter_cells}'
+            f'{cell(yearly.get(year), year_label, True)}</tr>'
+        )
+
+    month_headers = "".join(f"<th>{month}月</th>" for month in range(1, 13))
+    quarter_headers = "".join(f"<th>Q{quarter}</th>" for quarter in range(1, 5))
+    return (
+        '<div class="panel heatmap-panel"><div class="heatmap-wrap">'
+        '<table class="returns-grid"><thead><tr><th>年份</th>'
+        f'{month_headers}{quarter_headers}<th>全年 / YTD</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
+        '<div class="heatmap-legend"><span><i class="legend-loss"></i>负收益</span>'
+        '<span>颜色越深，绝对收益越高</span><span><i class="legend-gain"></i>正收益</span></div></div>'
+    )
+
+
 def build_dashboard(sma_window=200):
     """运行模拟回测，生成本地报告和静态网页。"""
     qqq = load_data("qqq_daily.csv")
@@ -265,6 +329,7 @@ def build_dashboard(sma_window=200):
         "</tr>"
         for row in recent_trades.itertuples()
     )
+    return_grid = _build_return_heatmap(daily)
 
     page = f"""<!doctype html>
 <html lang="zh-CN">
@@ -337,6 +402,18 @@ def build_dashboard(sma_window=200):
     .rule:last-child {{ border:0; }} .rule-num {{ width:30px;height:30px;display:grid;place-items:center;border-radius:9px;background:#4f8cff18;color:#8db8ff;font-weight:750;font-size:12px; }}
     .rule strong {{ display:block;font-size:14px; }} .rule span {{ display:block;margin-top:4px;color:var(--muted);font-size:12px;line-height:1.5; }}
     .table-panel {{ padding:0 20px 14px; overflow:auto; }}
+    .heatmap-panel {{ padding:14px; }} .heatmap-wrap {{ overflow-x:auto; padding-bottom:5px; }}
+    .returns-grid {{ min-width:1180px; table-layout:fixed; border-collapse:separate; border-spacing:6px; }}
+    .returns-grid th,.returns-grid td {{ border:0; border-radius:9px; padding:11px 6px; text-align:center; }}
+    .returns-grid thead th {{ color:#8796ad; background:#0b1220; font-size:10px; }}
+    .returns-grid .year-cell {{ position:sticky; left:0; z-index:2; color:#dce7f8; background:#111b2c; font-size:12px; }}
+    .return-cell {{ font-size:12px; font-weight:720; color:#dce7f8; }}
+    .return-cell.gain {{ color:#87f3c7; }} .return-cell.loss {{ color:#ffadba; }}
+    .return-cell.total {{ outline:1px solid #ffffff16; font-weight:800; }}
+    .return-cell.empty {{ color:#48566c; background:#0b111d; }}
+    .heatmap-legend {{ display:flex; align-items:center; justify-content:flex-end; gap:18px; padding:8px 7px 1px; color:var(--muted); font-size:11px; }}
+    .heatmap-legend span {{ display:flex; align-items:center; gap:6px; }}
+    .heatmap-legend i {{ width:10px; height:10px; border-radius:3px; }} .legend-loss {{ background:var(--red); }} .legend-gain {{ background:var(--green); }}
     table {{ width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;white-space:nowrap; }}
     th,td {{ padding:13px 10px;border-bottom:1px solid #ffffff0d;text-align:right;font-size:13px; }}
     th {{ color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:650; }}
@@ -355,7 +432,7 @@ def build_dashboard(sma_window=200):
     <header class="topbar">
       <a class="brand" href="#top"><span class="brand-mark">Q</span><span>QuantLab</span></a>
       <nav class="top-links" aria-label="主导航">
-        <a href="#overview">账户概览</a><a href="#chart">策略图表</a><a href="#rules">交易规则</a><a href="#trades">交易记录</a>
+        <a href="#overview">账户概览</a><a href="#chart">策略图表</a><a href="#returns">收益格子</a><a href="#rules">交易规则</a><a href="#trades">交易记录</a>
       </nav>
     </header>
 
@@ -400,6 +477,11 @@ def build_dashboard(sma_window=200):
     <section id="chart">
       <div class="section-head"><div><h2>账户收益曲线</h2><p>策略账户为主线，QQQ定投和累计投入作为对照；下方时间导航条可直接拖动缩放。</p></div><a class="button" href="interactive_market_chart.html" target="_blank" rel="noopener">全屏图表 ↗</a></div>
       <div class="panel"><iframe src="interactive_market_chart.html" loading="lazy" title="策略账户收益、QQQ基准、回撤与仓位图"></iframe></div>
+    </section>
+
+    <section id="returns">
+      <div class="section-head"><div><h2>年度 · 季度 · 月度收益</h2><p>按每日策略收益复合计算，已剔除每月新增资金对收益率的影响；当年数据为截至最新交易日的 YTD。</p></div></div>
+      {return_grid}
     </section>
 
     <section class="split" id="rules">
