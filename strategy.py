@@ -109,7 +109,7 @@ def _regime_signal_text(regime, close, sma, sma_window, bull_multiplier, bear_mu
     return f"中性缓冲区：等待突破牛市线或跌破熊市线"
 
 
-def backtest_qqq_sma_tqqq(
+def backtest_qqq_sma_tqqq_cash(
     qqq_df,
     tqqq_df,
     initial_capital=10_000,
@@ -118,9 +118,10 @@ def backtest_qqq_sma_tqqq(
     bull_multiplier=1.04,
     bear_multiplier=0.97,
     dip_threshold=0.01,
-    commission_rate=0.001,
-    slippage_rate=0.002,
-    sell_fee_rate=0.001,
+    commission_rate=0.0,
+    qqq_slippage_rate=0.0001,
+    tqqq_slippage_rate=0.0005,
+    sell_fee_rate=0.0000206,
     capital_gains_tax_rate=0.0,
 ):
     """
@@ -153,7 +154,8 @@ def backtest_qqq_sma_tqqq(
 
     rates = {
         "commission_rate": commission_rate,
-        "slippage_rate": slippage_rate,
+        "qqq_slippage_rate": qqq_slippage_rate,
+        "tqqq_slippage_rate": tqqq_slippage_rate,
         "sell_fee_rate": sell_fee_rate,
         "capital_gains_tax_rate": capital_gains_tax_rate,
     }
@@ -266,7 +268,7 @@ def backtest_qqq_sma_tqqq(
                     cash,
                     float(row["tqqq_open"]),
                     commission_rate,
-                    slippage_rate,
+                    tqqq_slippage_rate,
                 )
                 shares += trade["shares"]
                 cost_basis += trade["cost_basis"]
@@ -321,7 +323,7 @@ def backtest_qqq_sma_tqqq(
                     float(row["tqqq_open"]),
                     cost_basis,
                     commission_rate,
-                    slippage_rate,
+                    tqqq_slippage_rate,
                     sell_fee_rate,
                     capital_gains_tax_rate,
                 )
@@ -370,7 +372,7 @@ def backtest_qqq_sma_tqqq(
                 qqq_cash,
                 float(row["qqq_open"]),
                 commission_rate,
-                slippage_rate,
+                qqq_slippage_rate,
             )
             qqq_shares += qqq_buy["shares"]
             qqq_cost_basis += qqq_buy["cost_basis"]
@@ -384,7 +386,7 @@ def backtest_qqq_sma_tqqq(
                 float(row["tqqq_close"]),
                 cost_basis,
                 commission_rate,
-                slippage_rate,
+                tqqq_slippage_rate,
                 sell_fee_rate,
                 capital_gains_tax_rate,
             )
@@ -402,7 +404,7 @@ def backtest_qqq_sma_tqqq(
             float(row["qqq_close"]),
             qqq_cost_basis,
             commission_rate,
-            slippage_rate,
+            qqq_slippage_rate,
             sell_fee_rate,
             capital_gains_tax_rate,
         )
@@ -581,7 +583,8 @@ def backtest_qqq_sma_tqqq(
         "bear_multiplier": float(bear_multiplier),
         "dip_threshold": float(dip_threshold),
         "commission_rate": float(commission_rate),
-        "slippage_rate": float(slippage_rate),
+        "qqq_slippage_rate": float(qqq_slippage_rate),
+        "tqqq_slippage_rate": float(tqqq_slippage_rate),
         "sell_fee_rate": float(sell_fee_rate),
         "capital_gains_tax_rate": float(capital_gains_tax_rate),
         "total_contributions": total_contributions,
@@ -632,6 +635,541 @@ def backtest_qqq_sma_tqqq(
     return daily, trades, summary
 
 
+def backtest_qqq_sma_tqqq(
+    qqq_df,
+    tqqq_df,
+    bil_df,
+    initial_capital=10_000,
+    monthly_contribution=10_000,
+    sma_window=200,
+    bull_multiplier=1.04,
+    bear_multiplier=0.97,
+    dip_threshold=0.01,
+    commission_rate=0.0,
+    qqq_slippage_rate=0.0001,
+    tqqq_slippage_rate=0.0005,
+    bil_slippage_rate=0.0001,
+    sell_fee_rate=0.0000206,
+    capital_gains_tax_rate=0.0,
+):
+    """回测牛市持有 TQQQ、等待或熊市阶段持有 BIL 的轮动策略。"""
+    if initial_capital <= 0:
+        raise ValueError("initial_capital 必须大于 0")
+    if monthly_contribution < 0:
+        raise ValueError("monthly_contribution 不能小于 0")
+    if not isinstance(sma_window, int) or isinstance(sma_window, bool) or sma_window <= 0:
+        raise ValueError("sma_window 必须是正整数")
+    if bull_multiplier <= 1 or not 0 < bear_multiplier < 1:
+        raise ValueError("牛熊阈值倍数无效")
+    if not 0 < dip_threshold < 1:
+        raise ValueError("dip_threshold 必须在 (0, 1) 范围内")
+
+    rates = [
+        commission_rate,
+        qqq_slippage_rate,
+        tqqq_slippage_rate,
+        bil_slippage_rate,
+        sell_fee_rate,
+        capital_gains_tax_rate,
+    ]
+    if any(rate < 0 or rate >= 1 for rate in rates):
+        raise ValueError("费率和税率必须在 [0, 1) 范围内")
+
+    required_columns = {"trade_date", "open", "close"}
+    frames = {"QQQ": qqq_df, "TQQQ": tqqq_df, "BIL": bil_df}
+    for symbol, frame in frames.items():
+        if not required_columns.issubset(frame.columns):
+            raise ValueError(f"{symbol} 数据必须包含 trade_date、open 和 close 列")
+
+    prepared = {}
+    for symbol, frame in frames.items():
+        item = frame[["trade_date", "open", "close"]].copy()
+        item["trade_date"] = pd.to_datetime(item["trade_date"])
+        item = item.sort_values("trade_date").drop_duplicates("trade_date")
+        prefix = symbol.lower()
+        prepared[symbol] = item.rename(
+            columns={"open": f"{prefix}_open", "close": f"{prefix}_close"}
+        )
+
+    qqq = prepared["QQQ"]
+    qqq["qqq_sma"] = moving_average(qqq, sma_window, "qqq_close")
+    qqq["qqq_daily_change"] = qqq["qqq_close"].pct_change()
+    qqq["market_regime"] = market_regimes(
+        qqq["qqq_close"], qqq["qqq_sma"], bull_multiplier, bear_multiplier
+    )
+    data = qqq.merge(prepared["TQQQ"], on="trade_date", how="inner")
+    data = data.merge(prepared["BIL"], on="trade_date", how="inner")
+    price_columns = [
+        "qqq_open",
+        "qqq_close",
+        "tqqq_open",
+        "tqqq_close",
+        "bil_open",
+        "bil_close",
+    ]
+    data = data.dropna(subset=price_columns).reset_index(drop=True)
+    if data.empty:
+        raise ValueError("QQQ、TQQQ 与 BIL 没有共同交易日")
+    if (data[price_columns] <= 0).any().any():
+        raise ValueError("全部开盘价和收盘价必须大于 0")
+
+    slippage_rates = {
+        "QQQ": float(qqq_slippage_rate),
+        "TQQQ": float(tqqq_slippage_rate),
+        "BIL": float(bil_slippage_rate),
+    }
+    portfolio = {
+        "cash": float(initial_capital),
+        "tqqq_shares": 0.0,
+        "tqqq_cost_basis": 0.0,
+        "bil_shares": 0.0,
+        "bil_cost_basis": 0.0,
+        "transaction_costs_paid": 0.0,
+        "taxes_paid": 0.0,
+    }
+    trade_records = []
+
+    def buy_asset(asset, price, date, signal_date, reason, signal_close, signal_sma):
+        cash_before = portfolio["cash"]
+        if cash_before <= 0:
+            return None
+        trade = _buy_details(
+            cash_before, price, commission_rate, slippage_rates[asset]
+        )
+        key = asset.lower()
+        cost_before = portfolio[f"{key}_cost_basis"]
+        portfolio[f"{key}_shares"] += trade["shares"]
+        portfolio[f"{key}_cost_basis"] += trade["cost_basis"]
+        portfolio["cash"] = max(0.0, portfolio["cash"] + trade["net_cash_flow"])
+        portfolio["transaction_costs_paid"] += trade["total_transaction_cost"]
+        trade_records.append(
+            {
+                "trade_id": len(trade_records) + 1,
+                "trade_date": date,
+                "signal_date": signal_date,
+                "asset": asset,
+                "side": "buy",
+                "reason": reason,
+                "qqq_signal_close": signal_close,
+                f"qqq_sma{sma_window}": signal_sma,
+                "market_price": trade["market_price"],
+                "execution_price": trade["execution_price"],
+                "shares": trade["shares"],
+                "market_notional": trade["market_notional"],
+                "execution_notional": trade["execution_notional"],
+                "commission": trade["commission"],
+                "slippage_cost": trade["slippage"],
+                "sell_fee": 0.0,
+                "capital_gains_tax": 0.0,
+                "total_transaction_cost": trade["total_transaction_cost"],
+                "net_cash_flow": trade["net_cash_flow"],
+                "cash_before": cash_before,
+                "cash_after": portfolio["cash"],
+                "cost_basis_before": cost_before,
+                "cost_basis_after": portfolio[f"{key}_cost_basis"],
+                "realized_profit": 0.0,
+            }
+        )
+        return trade
+
+    def sell_asset(asset, price, date, signal_date, reason, signal_close, signal_sma):
+        key = asset.lower()
+        shares = portfolio[f"{key}_shares"]
+        if shares <= 0:
+            return None
+        cost_before = portfolio[f"{key}_cost_basis"]
+        cash_before = portfolio["cash"]
+        trade = _sell_details(
+            shares,
+            price,
+            cost_before,
+            commission_rate,
+            slippage_rates[asset],
+            sell_fee_rate,
+            capital_gains_tax_rate,
+        )
+        portfolio["cash"] += trade["net_cash_flow"]
+        portfolio[f"{key}_shares"] = 0.0
+        portfolio[f"{key}_cost_basis"] = 0.0
+        portfolio["transaction_costs_paid"] += trade["total_transaction_cost"]
+        portfolio["taxes_paid"] += trade["capital_gains_tax"]
+        trade_records.append(
+            {
+                "trade_id": len(trade_records) + 1,
+                "trade_date": date,
+                "signal_date": signal_date,
+                "asset": asset,
+                "side": "sell",
+                "reason": reason,
+                "qqq_signal_close": signal_close,
+                f"qqq_sma{sma_window}": signal_sma,
+                "market_price": trade["market_price"],
+                "execution_price": trade["execution_price"],
+                "shares": trade["shares"],
+                "market_notional": trade["market_notional"],
+                "execution_notional": trade["execution_notional"],
+                "commission": trade["commission"],
+                "slippage_cost": trade["slippage"],
+                "sell_fee": trade["sell_fee"],
+                "capital_gains_tax": trade["capital_gains_tax"],
+                "total_transaction_cost": trade["total_transaction_cost"],
+                "net_cash_flow": trade["net_cash_flow"],
+                "cash_before": cash_before,
+                "cash_after": portfolio["cash"],
+                "cost_basis_before": cost_before,
+                "cost_basis_after": 0.0,
+                "realized_profit": trade["realized_profit"],
+            }
+        )
+        return trade
+
+    qqq_cash = float(initial_capital)
+    qqq_shares = 0.0
+    qqq_cost_basis = 0.0
+    qqq_transaction_costs_paid = 0.0
+    total_contributions = float(initial_capital)
+    tqqq_buy_count = 0
+    tqqq_sell_count = 0
+    bil_buy_count = 0
+    bil_sell_count = 0
+    records = []
+    previous_total_value = None
+    previous_qqq_value = None
+    peak_value = None
+
+    for i, row in data.iterrows():
+        date = row["trade_date"]
+        contribution = 0.0
+        action = "hold"
+        action_reason = "保持当前仓位"
+        execution_signal = "initial"
+        signal_date = pd.NaT
+        signal_close = float("nan")
+        signal_sma = float("nan")
+        transaction_cost_today = 0.0
+        tax_today = 0.0
+
+        if i > 0:
+            if date.to_period("M") != data.at[i - 1, "trade_date"].to_period("M"):
+                contribution = float(monthly_contribution)
+                portfolio["cash"] += contribution
+                qqq_cash += contribution
+                total_contributions += contribution
+
+            signal_date = data.at[i - 1, "trade_date"]
+            signal_close = float(data.at[i - 1, "qqq_close"])
+            signal_sma_value = data.at[i - 1, "qqq_sma"]
+            signal_sma = (
+                float(signal_sma_value) if pd.notna(signal_sma_value) else float("nan")
+            )
+            previous_change = data.at[i - 1, "qqq_daily_change"]
+            previous_regime = str(data.at[i - 1, "market_regime"])
+            regime_before = str(data.at[i - 2, "market_regime"]) if i > 1 else "neutral"
+            bear_to_bull = regime_before == "bear" and previous_regime == "bull"
+            dip_buy = (
+                previous_regime == "bull"
+                and pd.notna(previous_change)
+                and float(previous_change) <= -dip_threshold
+            )
+            if previous_regime == "bear":
+                execution_signal = "bear_to_bil"
+            elif bear_to_bull:
+                execution_signal = "bear_to_bull_buy"
+            elif dip_buy:
+                execution_signal = "bull_dip_buy"
+            else:
+                execution_signal = "hold"
+
+            if execution_signal == "bear_to_bil" and portfolio["tqqq_shares"] > 0:
+                reason = (
+                    f"QQQ 跌破 SMA{sma_window}×{bear_multiplier:.2f}，"
+                    "卖出 TQQQ 并转入 BIL"
+                )
+                sold = sell_asset(
+                    "TQQQ", float(row["tqqq_open"]), date, signal_date,
+                    reason, signal_close, signal_sma,
+                )
+                bought = buy_asset(
+                    "BIL", float(row["bil_open"]), date, signal_date,
+                    reason, signal_close, signal_sma,
+                )
+                transaction_cost_today += sold["total_transaction_cost"]
+                transaction_cost_today += bought["total_transaction_cost"]
+                tax_today += sold["capital_gains_tax"]
+                tqqq_sell_count += 1
+                bil_buy_count += 1
+                action = "sell"
+                action_reason = reason
+            elif execution_signal in {"bear_to_bull_buy", "bull_dip_buy"} and (
+                portfolio["bil_shares"] > 0 or portfolio["cash"] > 0
+            ):
+                if execution_signal == "bear_to_bull_buy":
+                    reason = "QQQ 熊转牛，卖出 BIL 并将全部资金买入 TQQQ"
+                else:
+                    reason = (
+                        f"牛市中 QQQ 单日下跌 {abs(float(previous_change)):.2%}，"
+                        "卖出 BIL 并将全部可用资金买入 TQQQ"
+                    )
+                if portfolio["bil_shares"] > 0:
+                    sold = sell_asset(
+                        "BIL", float(row["bil_open"]), date, signal_date,
+                        reason, signal_close, signal_sma,
+                    )
+                    transaction_cost_today += sold["total_transaction_cost"]
+                    tax_today += sold["capital_gains_tax"]
+                    bil_sell_count += 1
+                bought = buy_asset(
+                    "TQQQ", float(row["tqqq_open"]), date, signal_date,
+                    reason, signal_close, signal_sma,
+                )
+                transaction_cost_today += bought["total_transaction_cost"]
+                tqqq_buy_count += 1
+                action = "buy"
+                action_reason = reason
+
+        if i == 0:
+            action_reason = "回测起始资金买入短期美国国库券 ETF BIL"
+            bought = buy_asset(
+                "BIL", float(row["bil_open"]), date, pd.NaT,
+                action_reason, float("nan"), float("nan"),
+            )
+            transaction_cost_today += bought["total_transaction_cost"]
+            bil_buy_count += 1
+            action = "buy_bil"
+        elif portfolio["bil_shares"] > 0 and portfolio["cash"] > 0:
+            reason = "处于 BIL 防守仓位，将本月新增资金继续买入 BIL"
+            bought = buy_asset(
+                "BIL", float(row["bil_open"]), date, signal_date,
+                reason, signal_close, signal_sma,
+            )
+            transaction_cost_today += bought["total_transaction_cost"]
+            bil_buy_count += 1
+            if action == "hold":
+                action = "buy_bil"
+                action_reason = reason
+
+        if i == 0 or contribution > 0:
+            qqq_buy = _buy_details(
+                qqq_cash, float(row["qqq_open"]), commission_rate, qqq_slippage_rate
+            )
+            qqq_shares += qqq_buy["shares"]
+            qqq_cost_basis += qqq_buy["cost_basis"]
+            qqq_cash = max(0.0, qqq_cash + qqq_buy["net_cash_flow"])
+            qqq_transaction_costs_paid += qqq_buy["total_transaction_cost"]
+
+        tqqq_market_value = portfolio["tqqq_shares"] * float(row["tqqq_close"])
+        bil_market_value = portfolio["bil_shares"] * float(row["bil_close"])
+        tqqq_exit = (
+            _sell_details(
+                portfolio["tqqq_shares"], float(row["tqqq_close"]),
+                portfolio["tqqq_cost_basis"], commission_rate, tqqq_slippage_rate,
+                sell_fee_rate, capital_gains_tax_rate,
+            )
+            if portfolio["tqqq_shares"] > 0
+            else {"net_cash_flow": 0.0, "total_transaction_cost": 0.0, "capital_gains_tax": 0.0}
+        )
+        bil_exit = (
+            _sell_details(
+                portfolio["bil_shares"], float(row["bil_close"]),
+                portfolio["bil_cost_basis"], commission_rate, bil_slippage_rate,
+                sell_fee_rate, capital_gains_tax_rate,
+            )
+            if portfolio["bil_shares"] > 0
+            else {"net_cash_flow": 0.0, "total_transaction_cost": 0.0, "capital_gains_tax": 0.0}
+        )
+        liquidation_value = tqqq_exit["net_cash_flow"] + bil_exit["net_cash_flow"]
+        total_value = portfolio["cash"] + liquidation_value
+
+        qqq_exit = _sell_details(
+            qqq_shares, float(row["qqq_close"]), qqq_cost_basis,
+            commission_rate, qqq_slippage_rate, sell_fee_rate, capital_gains_tax_rate,
+        )
+        qqq_value = qqq_cash + qqq_exit["net_cash_flow"]
+        if previous_total_value is None:
+            daily_profit = total_value - initial_capital
+            daily_return = total_value / initial_capital - 1
+            qqq_daily_profit = qqq_value - initial_capital
+            qqq_daily_return = qqq_value / initial_capital - 1
+        else:
+            daily_profit = total_value - previous_total_value - contribution
+            daily_return = daily_profit / (previous_total_value + contribution)
+            qqq_daily_profit = qqq_value - previous_qqq_value - contribution
+            qqq_daily_return = qqq_daily_profit / (previous_qqq_value + contribution)
+
+        peak_value = total_value if peak_value is None else max(peak_value, total_value)
+        regime = str(row["market_regime"])
+        current_change = row["qqq_daily_change"]
+        prior_regime = str(data.at[i - 1, "market_regime"]) if i > 0 else "neutral"
+        current_bear_to_bull = prior_regime == "bear" and regime == "bull"
+        if regime == "bear":
+            next_instruction = "下一交易日持有或买入 BIL；若持有 TQQQ 则切换至 BIL"
+        elif current_bear_to_bull:
+            next_instruction = "熊转牛，下一交易日卖出 BIL 并买入 TQQQ"
+        elif regime == "bull" and pd.notna(current_change) and float(current_change) <= -dip_threshold:
+            next_instruction = "牛市回调达到阈值，下一交易日卖出 BIL 并买入 TQQQ"
+        elif portfolio["tqqq_shares"] > 0:
+            next_instruction = "继续持有 TQQQ；新增现金等待下一次回调"
+        else:
+            next_instruction = "继续持有 BIL，等待牛市回调买点"
+
+        position = "TQQQ" if portfolio["tqqq_shares"] > 0 else "BIL"
+        active_shares = (
+            portfolio["tqqq_shares"] if position == "TQQQ" else portfolio["bil_shares"]
+        )
+        active_cost = (
+            portfolio["tqqq_cost_basis"] if position == "TQQQ" else portfolio["bil_cost_basis"]
+        )
+        gross_value = portfolio["cash"] + tqqq_market_value + bil_market_value
+        records.append(
+            {
+                "trade_date": date,
+                "qqq_open": float(row["qqq_open"]),
+                "qqq_close": float(row["qqq_close"]),
+                f"qqq_sma{sma_window}": float(row["qqq_sma"]) if pd.notna(row["qqq_sma"]) else float("nan"),
+                "bull_threshold": float(row["qqq_sma"] * bull_multiplier) if pd.notna(row["qqq_sma"]) else float("nan"),
+                "bear_threshold": float(row["qqq_sma"] * bear_multiplier) if pd.notna(row["qqq_sma"]) else float("nan"),
+                "market_regime": regime,
+                "qqq_daily_change": float(current_change) if pd.notna(current_change) else float("nan"),
+                "tqqq_open": float(row["tqqq_open"]),
+                "tqqq_close": float(row["tqqq_close"]),
+                "tqqq_daily_change": float(row["tqqq_close"]) / float(data.at[i - 1, "tqqq_close"]) - 1 if i > 0 else float("nan"),
+                "bil_open": float(row["bil_open"]),
+                "bil_close": float(row["bil_close"]),
+                "bil_daily_change": float(row["bil_close"]) / float(data.at[i - 1, "bil_close"]) - 1 if i > 0 else float("nan"),
+                "close_signal": regime,
+                "next_day_instruction": next_instruction,
+                "execution_signal_date": signal_date,
+                "execution_signal": execution_signal,
+                "action": action,
+                "action_reason": action_reason,
+                "monthly_contribution": contribution,
+                "total_contributions": total_contributions,
+                "position_status": position,
+                "cash": portfolio["cash"],
+                "shares": portfolio["tqqq_shares"],
+                "bil_shares": portfolio["bil_shares"],
+                "average_cost_per_share": active_cost / active_shares if active_shares > 0 else 0.0,
+                "cost_basis": active_cost,
+                "tqqq_cost_basis": portfolio["tqqq_cost_basis"],
+                "bil_cost_basis": portfolio["bil_cost_basis"],
+                "tqqq_market_value": tqqq_market_value,
+                "bil_market_value": bil_market_value,
+                "position_market_value": tqqq_market_value + bil_market_value,
+                "position_liquidation_value": liquidation_value,
+                "unrealized_profit_before_exit_cost": tqqq_market_value + bil_market_value - active_cost,
+                "exposure_ratio": tqqq_market_value / gross_value if gross_value > 0 else 0.0,
+                "bil_exposure_ratio": bil_market_value / gross_value if gross_value > 0 else 0.0,
+                "total_value": total_value,
+                "daily_profit": daily_profit,
+                "daily_return": daily_return,
+                "cumulative_profit": total_value - total_contributions,
+                "cumulative_return": total_value / total_contributions - 1,
+                "drawdown": total_value / peak_value - 1,
+                "transaction_cost_today": transaction_cost_today,
+                "transaction_costs_paid": portfolio["transaction_costs_paid"],
+                "capital_gains_tax_today": tax_today,
+                "capital_gains_taxes_paid": portfolio["taxes_paid"],
+                "estimated_exit_cost": tqqq_exit["total_transaction_cost"] + bil_exit["total_transaction_cost"],
+                "estimated_exit_tax": tqqq_exit["capital_gains_tax"] + bil_exit["capital_gains_tax"],
+                "qqq_benchmark_shares": qqq_shares,
+                "qqq_benchmark_cost_basis": qqq_cost_basis,
+                "qqq_benchmark_value": qqq_value,
+                "qqq_benchmark_daily_profit": qqq_daily_profit,
+                "qqq_benchmark_daily_return": qqq_daily_return,
+                "qqq_benchmark_cumulative_profit": qqq_value - total_contributions,
+                "qqq_benchmark_cumulative_return": qqq_value / total_contributions - 1,
+                "qqq_transaction_costs_paid": qqq_transaction_costs_paid,
+                "qqq_estimated_exit_cost": qqq_exit["total_transaction_cost"],
+                "qqq_estimated_exit_tax": qqq_exit["capital_gains_tax"],
+            }
+        )
+        previous_total_value = total_value
+        previous_qqq_value = qqq_value
+
+    daily = pd.DataFrame(records)
+    trades = pd.DataFrame(trade_records)
+    latest = daily.iloc[-1]
+    latest_regime = str(latest["market_regime"])
+    latest_change = float(latest["qqq_daily_change"])
+    latest_bear_to_bull = (
+        len(daily) > 1
+        and str(daily.iloc[-2]["market_regime"]) == "bear"
+        and latest_regime == "bull"
+    )
+    if latest_regime == "bear" and latest["position_status"] == "TQQQ":
+        next_action = "sell"
+        next_action_text = "卖出 TQQQ，并将全部资金买入 BIL"
+        next_reason = "QQQ 已进入熊市，切换至短期美国国库券防守仓位"
+    elif latest_bear_to_bull or (
+        latest_regime == "bull" and latest_change <= -dip_threshold
+    ):
+        next_action = "buy"
+        next_action_text = "卖出 BIL，并将全部资金买入 TQQQ"
+        next_reason = str(latest["next_day_instruction"])
+    else:
+        next_action = "hold"
+        next_action_text = f"不交易，继续持有 {latest['position_status']}"
+        next_reason = str(latest["next_day_instruction"])
+
+    today_action_text = {
+        "buy": "已切换或加仓 TQQQ",
+        "sell": "已卖出 TQQQ 并切换至 BIL",
+        "buy_bil": "已买入 BIL",
+        "hold": "今日未交易",
+    }.get(str(latest["action"]), str(latest["action"]))
+    final_value = float(latest["total_value"])
+    summary = {
+        "start_date": daily.iloc[0]["trade_date"],
+        "end_date": latest["trade_date"],
+        "defensive_asset": "BIL",
+        "initial_capital": float(initial_capital),
+        "monthly_contribution": float(monthly_contribution),
+        "sma_window": int(sma_window),
+        "bull_multiplier": float(bull_multiplier),
+        "bear_multiplier": float(bear_multiplier),
+        "dip_threshold": float(dip_threshold),
+        "commission_rate": float(commission_rate),
+        "qqq_slippage_rate": float(qqq_slippage_rate),
+        "tqqq_slippage_rate": float(tqqq_slippage_rate),
+        "bil_slippage_rate": float(bil_slippage_rate),
+        "sell_fee_rate": float(sell_fee_rate),
+        "capital_gains_tax_rate": float(capital_gains_tax_rate),
+        "total_contributions": total_contributions,
+        "final_value": final_value,
+        "qqq_benchmark_final_value": float(latest["qqq_benchmark_value"]),
+        "strategy_vs_qqq": final_value / float(latest["qqq_benchmark_value"]) - 1,
+        "transaction_costs_paid_or_estimated": float(latest["transaction_costs_paid"] + latest["estimated_exit_cost"]),
+        "capital_gains_taxes_paid_or_estimated": float(latest["capital_gains_taxes_paid"] + latest["estimated_exit_tax"]),
+        "profit": final_value - total_contributions,
+        "return_rate": final_value / total_contributions - 1,
+        "max_drawdown": float(daily["drawdown"].min()),
+        "buy_count": tqqq_buy_count,
+        "sell_count": tqqq_sell_count,
+        "bil_buy_count": bil_buy_count,
+        "bil_sell_count": bil_sell_count,
+        "current_position": str(latest["position_status"]),
+        "latest_signal": latest_regime,
+        "latest_signal_text": _regime_signal_text(
+            latest_regime, float(latest["qqq_close"]), latest[f"qqq_sma{sma_window}"],
+            sma_window, bull_multiplier, bear_multiplier,
+        ),
+        "latest_qqq_close": float(latest["qqq_close"]),
+        "latest_sma": float(latest[f"qqq_sma{sma_window}"]),
+        "latest_qqq_daily_change": latest_change,
+        "latest_tqqq_daily_change": float(latest["tqqq_daily_change"]),
+        "latest_bil_close": float(latest["bil_close"]),
+        "latest_bil_daily_change": float(latest["bil_daily_change"]),
+        "latest_daily_profit": float(latest["daily_profit"]),
+        "latest_daily_return": float(latest["daily_return"]),
+        "today_action": str(latest["action"]),
+        "today_action_text": today_action_text,
+        "next_action": next_action,
+        "next_action_text": next_action_text,
+        "next_action_reason": next_reason,
+    }
+    return daily, trades, summary
+
+
 def report_tables(daily):
     """从完整每日账本拆分出持仓明细与涨跌明细。"""
     position_columns = [
@@ -642,13 +1180,18 @@ def report_tables(daily):
         "monthly_contribution",
         "cash",
         "shares",
+        "bil_shares",
         "average_cost_per_share",
         "cost_basis",
         "tqqq_close",
+        "bil_close",
+        "tqqq_market_value",
+        "bil_market_value",
         "position_market_value",
         "position_liquidation_value",
         "unrealized_profit_before_exit_cost",
         "exposure_ratio",
+        "bil_exposure_ratio",
         "total_value",
         "estimated_exit_cost",
         "estimated_exit_tax",
@@ -660,6 +1203,8 @@ def report_tables(daily):
         "qqq_daily_change",
         "tqqq_close",
         "tqqq_daily_change",
+        "bil_close",
+        "bil_daily_change",
         "close_signal",
         "next_day_instruction",
         "total_value",
@@ -736,7 +1281,8 @@ if __name__ == "__main__":
 
     qqq = load_data("qqq_daily.csv")
     tqqq = load_data("tqqq_daily.csv")
-    daily, trades, summary = backtest_qqq_sma_tqqq(qqq, tqqq)
+    bil = load_data("bil_daily.csv")
+    daily, trades, summary = backtest_qqq_sma_tqqq(qqq, tqqq, bil)
     positions, changes = report_tables(daily)
     report_dir = Path("reports")
     report_dir.mkdir(exist_ok=True)

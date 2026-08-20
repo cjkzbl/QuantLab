@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       refresh:
-        description: Refresh QQQ and TQQQ market data
+        description: Refresh QQQ, TQQQ and BIL market data
         required: true
         default: true
         type: boolean
@@ -62,11 +62,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add qqq_daily.csv tqqq_daily.csv
+          git add qqq_daily.csv tqqq_daily.csv bil_daily.csv
           if git diff --cached --quiet; then
-            echo "QQQ and TQQQ CSV files are already current; no commit needed."
+            echo "QQQ, TQQQ and BIL CSV files are already current; no commit needed."
           else
-            git commit -m "Update QQQ and TQQQ market data [skip ci]"
+            git commit -m "Update QQQ, TQQQ and BIL market data [skip ci]"
             git push origin HEAD:main
           fi
 

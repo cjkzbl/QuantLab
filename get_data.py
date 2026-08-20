@@ -37,6 +37,11 @@ def get_tqqq_data():
     return _get_daily_data("TQQQ.US")
 
 
+def get_bil_data():
+    """获取 BIL 从上市至今的后复权日线行情。"""
+    return _get_daily_data("BIL.US")
+
+
 def save_data(df, filename):
     """把行情 DataFrame 保存为 UTF-8 CSV 文件。"""
     path = Path(filename)
@@ -49,9 +54,11 @@ def load_data(filename):
     return pd.read_csv(filename, encoding="utf-8-sig")
 
 
-def validate_market_data(qqq_df, tqqq_df, max_age_days=7, today=None):
-    """确认两份行情完整、日期一致，并且最新交易日没有过期。"""
+def validate_market_data(qqq_df, tqqq_df, bil_df=None, max_age_days=7, today=None):
+    """确认行情完整、最新日期一致，并且没有过期。"""
     frames = {"QQQ": qqq_df, "TQQQ": tqqq_df}
+    if bil_df is not None:
+        frames["BIL"] = bil_df
     details = {}
 
     for symbol, frame in frames.items():
@@ -75,11 +82,13 @@ def validate_market_data(qqq_df, tqqq_df, max_age_days=7, today=None):
         }
 
     qqq_latest = details["QQQ"]["latest_date"]
-    tqqq_latest = details["TQQQ"]["latest_date"]
-    if qqq_latest != tqqq_latest:
+    latest_dates = {symbol: item["latest_date"] for symbol, item in details.items()}
+    if len(set(latest_dates.values())) != 1:
+        detail_text = "，".join(
+            f"{symbol}={latest:%Y-%m-%d}" for symbol, latest in latest_dates.items()
+        )
         raise ValueError(
-            "QQQ 与 TQQQ 最新交易日不一致："
-            f"QQQ={qqq_latest:%Y-%m-%d}，TQQQ={tqqq_latest:%Y-%m-%d}"
+            f"QQQ、TQQQ 与 BIL 最新交易日不一致：{detail_text}"
         )
 
     reference_date = pd.Timestamp(today or date.today()).normalize()
@@ -92,12 +101,15 @@ def validate_market_data(qqq_df, tqqq_df, max_age_days=7, today=None):
             f"距离当前日期 {age_days} 天，允许最多 {max_age_days} 天"
         )
 
-    return {
+    result = {
         "latest_date": qqq_latest.strftime("%Y-%m-%d"),
         "age_days": age_days,
         "qqq_rows": details["QQQ"]["rows"],
         "tqqq_rows": details["TQQQ"]["rows"],
     }
+    if "BIL" in details:
+        result["bil_rows"] = details["BIL"]["rows"]
+    return result
 
 
 def save_market_data_pair(
@@ -146,12 +158,42 @@ def save_market_data_pair(
 
 
 def refresh_and_save_market_data(max_age_days=7):
-    """同时下载两只 ETF，验证后持久化到正式 CSV。"""
+    """同时下载三只 ETF，验证后持久化到正式 CSV。"""
     qqq = get_qqq_data()
     tqqq = get_tqqq_data()
-    return save_market_data_pair(
-        qqq,
-        tqqq,
+    bil = get_bil_data()
+    expected = validate_market_data(
+        qqq, tqqq, bil, max_age_days=max_age_days
+    )
+    paths = {
+        "QQQ": Path("qqq_daily.csv"),
+        "TQQQ": Path("tqqq_daily.csv"),
+        "BIL": Path("bil_daily.csv"),
+    }
+    frames = {"QQQ": qqq, "TQQQ": tqqq, "BIL": bil}
+    temp_paths = {
+        symbol: path.with_name(f".{path.name}.tmp") for symbol, path in paths.items()
+    }
+    try:
+        for symbol, frame in frames.items():
+            save_data(frame, temp_paths[symbol])
+        saved = validate_market_data(
+            load_data(temp_paths["QQQ"]),
+            load_data(temp_paths["TQQQ"]),
+            load_data(temp_paths["BIL"]),
+            max_age_days=max_age_days,
+        )
+        if saved != expected:
+            raise RuntimeError("CSV 写入后校验结果与下载数据不一致")
+        for symbol, path in paths.items():
+            temp_paths[symbol].replace(path)
+    finally:
+        for temp_path in temp_paths.values():
+            temp_path.unlink(missing_ok=True)
+    return validate_market_data(
+        load_data(paths["QQQ"]),
+        load_data(paths["TQQQ"]),
+        load_data(paths["BIL"]),
         max_age_days=max_age_days,
     )
 
@@ -161,5 +203,6 @@ if __name__ == "__main__":
     print(
         "行情已更新并校验："
         f"交易日={result['latest_date']}，"
-        f"QQQ={result['qqq_rows']} 行，TQQQ={result['tqqq_rows']} 行"
+        f"QQQ={result['qqq_rows']} 行，TQQQ={result['tqqq_rows']} 行，"
+        f"BIL={result['bil_rows']} 行"
     )
