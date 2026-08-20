@@ -121,6 +121,22 @@ def build_interactive_market_chart(
         row=1,
         col=1,
     )
+    for column, name, color, dash in [
+        ("bull_threshold", "牛市线", "#22c55e", "dash"),
+        ("bear_threshold", "熊市线", "#ef4444", "dash"),
+    ]:
+        figure.add_trace(
+            go.Scatter(
+                x=dates,
+                y=data[column],
+                name=name,
+                mode="lines",
+                line={"color": color, "width": 1.3, "dash": dash},
+                hovertemplate=f"{name}：%{{y:,.2f}}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
 
     buys = _marker_data(data, ["initial_buy", "buy"])
     sells = _marker_data(data, ["sell"])

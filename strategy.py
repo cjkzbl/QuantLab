@@ -72,75 +72,64 @@ def _sell_details(
     }
 
 
-def _signal(close, sma):
+def market_regimes(
+    closes,
+    smas,
+    bull_multiplier=1.04,
+    bear_multiplier=0.97,
+):
+    """Build a hysteresis regime series; the buffer keeps the prior regime."""
+    regime = "neutral"
+    values = []
+    for close, sma in zip(closes, smas):
+        if pd.isna(sma):
+            values.append(regime)
+            continue
+        if close > sma * bull_multiplier:
+            regime = "bull"
+        elif close < sma * bear_multiplier:
+            regime = "bear"
+        values.append(regime)
+    return pd.Series(values, index=closes.index, name="market_regime")
+
+
+def _regime_signal_text(regime, close, sma, sma_window, bull_multiplier, bear_multiplier):
     if pd.isna(sma):
-        return "sma_unavailable"
-    if close > sma:
-        return "above_sma"
-    if close < sma:
-        return "below_sma"
-    return "equal_sma"
-
-
-def determine_next_action(latest_signal, current_position, sma_window):
-    """把均线状态与当前仓位转换为下一交易日的实际操作。"""
-    if latest_signal == "above_sma":
-        signal_text = f"QQQ 收盘高于 SMA{sma_window}"
-        if current_position == "cash":
-            return {
-                "signal_text": signal_text,
-                "action": "buy",
-                "action_text": "买入 TQQQ",
-                "reason": "当前空仓，QQQ 收盘高于均线",
-            }
-        return {
-            "signal_text": signal_text,
-            "action": "hold",
-            "action_text": "不动，继续持有 TQQQ",
-            "reason": "当前已持仓，QQQ 收盘仍高于均线",
-        }
-
-    if latest_signal == "below_sma":
-        signal_text = f"QQQ 收盘低于 SMA{sma_window}"
-        if current_position == "TQQQ":
-            return {
-                "signal_text": signal_text,
-                "action": "sell",
-                "action_text": "卖出 TQQQ",
-                "reason": "当前持仓，QQQ 收盘低于均线",
-            }
-        return {
-            "signal_text": signal_text,
-            "action": "hold",
-            "action_text": "不动，继续持有现金",
-            "reason": "当前已空仓，QQQ 收盘仍低于均线",
-        }
-
-    return {
-        "signal_text": f"QQQ 与 SMA{sma_window} 相等或均线尚不可用",
-        "action": "hold",
-        "action_text": "不动",
-        "reason": "没有产生明确的买入或卖出信号",
-    }
+        return f"SMA{sma_window} 尚不可用，市场状态为中性"
+    if regime == "bull":
+        return (
+            f"牛市：QQQ={close:.2f}，牛市线="
+            f"SMA{sma_window}×{bull_multiplier:.2f}={sma * bull_multiplier:.2f}"
+        )
+    if regime == "bear":
+        return (
+            f"熊市：QQQ={close:.2f}，熊市线="
+            f"SMA{sma_window}×{bear_multiplier:.2f}={sma * bear_multiplier:.2f}"
+        )
+    return f"中性缓冲区：等待突破牛市线或跌破熊市线"
 
 
 def backtest_qqq_sma_tqqq(
     qqq_df,
     tqqq_df,
-    initial_capital=500_000,
+    initial_capital=10_000,
     monthly_contribution=10_000,
     sma_window=200,
+    bull_multiplier=1.04,
+    bear_multiplier=0.97,
+    dip_threshold=0.01,
     commission_rate=0.001,
     slippage_rate=0.002,
     sell_fee_rate=0.001,
     capital_gains_tax_rate=0.0,
 ):
     """
-    回测 QQQ SMA 择时、TQQQ 交易策略。
+    回测带牛熊缓冲区的 QQQ SMA200 / TQQQ 策略。
 
-    首日一次性投入初始本金买入 TQQQ。之后使用 QQQ 前一交易日收盘价
-    与 SMA 的关系，在下一交易日开盘全仓买入或清仓。每月首个交易日将
-    定投资金加入现金池；策略空仓转为持仓时，将现金池一并投入。
+    QQQ 高于 SMA×bull_multiplier 时进入牛市，低于 SMA×bear_multiplier
+    时进入熊市，缓冲区内延续原状态。熊市清仓；熊转牛立即投入全部现金；
+    牛市中仅在 QQQ 单日跌幅达到 dip_threshold 时投入全部可用现金。
+    每月首个交易日把定投资金加入现金池。收盘产生信号，下一交易日开盘执行。
 
     返回：
       daily：包含全部行情、信号、持仓、资产、涨跌和费用字段的每日账本。
@@ -153,6 +142,14 @@ def backtest_qqq_sma_tqqq(
         raise ValueError("monthly_contribution 不能小于 0")
     if not isinstance(sma_window, int) or isinstance(sma_window, bool) or sma_window <= 0:
         raise ValueError("sma_window 必须是正整数")
+    if bull_multiplier <= 1:
+        raise ValueError("bull_multiplier 必须大于 1")
+    if not 0 < bear_multiplier < 1:
+        raise ValueError("bear_multiplier 必须在 (0, 1) 范围内")
+    if bull_multiplier <= bear_multiplier:
+        raise ValueError("bull_multiplier 必须大于 bear_multiplier")
+    if not 0 < dip_threshold < 1:
+        raise ValueError("dip_threshold 必须在 (0, 1) 范围内")
 
     rates = {
         "commission_rate": commission_rate,
@@ -173,6 +170,13 @@ def backtest_qqq_sma_tqqq(
     qqq["trade_date"] = pd.to_datetime(qqq["trade_date"])
     qqq = qqq.sort_values("trade_date").drop_duplicates("trade_date")
     qqq["qqq_sma"] = moving_average(qqq, sma_window)
+    qqq["qqq_daily_change"] = qqq["close"].pct_change()
+    qqq["market_regime"] = market_regimes(
+        qqq["close"],
+        qqq["qqq_sma"],
+        bull_multiplier,
+        bear_multiplier,
+    )
     qqq = qqq.rename(columns={"open": "qqq_open", "close": "qqq_close"})
 
     tqqq = tqqq_df[["trade_date", "open", "close"]].copy()
@@ -233,25 +237,54 @@ def backtest_qqq_sma_tqqq(
 
             previous_close = float(data.at[i - 1, "qqq_close"])
             previous_sma = data.at[i - 1, "qqq_sma"]
+            previous_change = data.at[i - 1, "qqq_daily_change"]
+            previous_regime = str(data.at[i - 1, "market_regime"])
+            regime_before_signal = (
+                str(data.at[i - 2, "market_regime"]) if i > 1 else "neutral"
+            )
+            bear_to_bull = regime_before_signal == "bear" and previous_regime == "bull"
+            dip_buy = (
+                previous_regime == "bull"
+                and pd.notna(previous_change)
+                and float(previous_change) <= -dip_threshold
+            )
             signal_date = data.at[i - 1, "trade_date"]
-            execution_signal = _signal(previous_close, previous_sma)
+            if previous_regime == "bear":
+                execution_signal = "bear_exit"
+            elif bear_to_bull:
+                execution_signal = "bear_to_bull_buy"
+            elif dip_buy:
+                execution_signal = "bull_dip_buy"
+            else:
+                execution_signal = "hold"
 
-            if execution_signal == "above_sma" and shares == 0 and cash > 0:
+            if execution_signal in {"bear_to_bull_buy", "bull_dip_buy"} and cash > 0:
                 cash_before_action = cash
+                shares_before_action = shares
+                cost_basis_before_action = cost_basis
                 trade = _buy_details(
                     cash,
                     float(row["tqqq_open"]),
                     commission_rate,
                     slippage_rate,
                 )
-                shares = trade["shares"]
-                cost_basis = trade["cost_basis"]
+                shares += trade["shares"]
+                cost_basis += trade["cost_basis"]
                 cash = max(0.0, cash + trade["net_cash_flow"])
                 transaction_costs_paid += trade["total_transaction_cost"]
                 transaction_cost_today += trade["total_transaction_cost"]
                 buy_count += 1
                 action = "buy"
-                action_reason = f"前一日 QQQ 收盘高于 SMA{sma_window}"
+                if bear_to_bull:
+                    action_reason = (
+                        f"QQQ 熊转牛：收盘突破 SMA{sma_window}×{bull_multiplier:.2f}，"
+                        "不等待回调，全现金买入 TQQQ"
+                    )
+                else:
+                    action_reason = (
+                        f"牛市中 QQQ 单日下跌 {abs(float(previous_change)):.2%}，"
+                        f"达到 {dip_threshold:.2%} 回调阈值，全现金买入 TQQQ"
+                    )
                 trade_records.append(
                     {
                         "trade_id": len(trade_records) + 1,
@@ -279,7 +312,7 @@ def backtest_qqq_sma_tqqq(
                         "realized_profit": 0.0,
                     }
                 )
-            elif execution_signal == "below_sma" and shares > 0:
+            elif execution_signal == "bear_exit" and shares > 0:
                 cash_before_action = cash
                 shares_before_action = shares
                 cost_basis_before_action = cost_basis
@@ -301,7 +334,9 @@ def backtest_qqq_sma_tqqq(
                 cost_basis = 0.0
                 sell_count += 1
                 action = "sell"
-                action_reason = f"前一日 QQQ 收盘低于 SMA{sma_window}"
+                action_reason = (
+                    f"QQQ 跌破 SMA{sma_window}×{bear_multiplier:.2f}，进入熊市并清仓 TQQQ"
+                )
                 trade_records.append(
                     {
                         "trade_id": len(trade_records) + 1,
@@ -329,50 +364,6 @@ def backtest_qqq_sma_tqqq(
                         "realized_profit": trade["realized_profit"],
                     }
                 )
-
-        if i == 0:
-            cash_before_action = cash
-            trade = _buy_details(
-                cash,
-                float(row["tqqq_open"]),
-                commission_rate,
-                slippage_rate,
-            )
-            shares = trade["shares"]
-            cost_basis = trade["cost_basis"]
-            cash = max(0.0, cash + trade["net_cash_flow"])
-            transaction_costs_paid += trade["total_transaction_cost"]
-            transaction_cost_today = trade["total_transaction_cost"]
-            buy_count = 1
-            action = "initial_buy"
-            action_reason = "回测首日按规则全仓买入 TQQQ"
-            trade_records.append(
-                {
-                    "trade_id": 1,
-                    "trade_date": date,
-                    "signal_date": pd.NaT,
-                    "side": "buy",
-                    "reason": action_reason,
-                    "qqq_signal_close": float("nan"),
-                    f"qqq_sma{sma_window}": float("nan"),
-                    "tqqq_market_price": trade["market_price"],
-                    "execution_price": trade["execution_price"],
-                    "shares": trade["shares"],
-                    "market_notional": trade["market_notional"],
-                    "execution_notional": trade["execution_notional"],
-                    "commission": trade["commission"],
-                    "slippage_cost": trade["slippage"],
-                    "sell_fee": 0.0,
-                    "capital_gains_tax": 0.0,
-                    "total_transaction_cost": trade["total_transaction_cost"],
-                    "net_cash_flow": trade["net_cash_flow"],
-                    "cash_before": cash_before_action,
-                    "cash_after": cash,
-                    "cost_basis_before": 0.0,
-                    "cost_basis_after": cost_basis,
-                    "realized_profit": 0.0,
-                }
-            )
 
         if i == 0 or contribution > 0:
             qqq_buy = _buy_details(
@@ -429,13 +420,24 @@ def backtest_qqq_sma_tqqq(
             qqq_daily_return = qqq_daily_profit / (previous_qqq_value + contribution)
 
         peak_value = total_value if peak_value is None else max(peak_value, total_value)
-        current_signal = _signal(float(row["qqq_close"]), row["qqq_sma"])
-        if current_signal == "above_sma":
-            next_instruction = "下一交易日持有；若空仓则全仓买入 TQQQ"
-        elif current_signal == "below_sma":
-            next_instruction = "下一交易日清仓 TQQQ"
+        current_signal = str(row["market_regime"])
+        current_change = row["qqq_daily_change"]
+        prior_regime = str(data.at[i - 1, "market_regime"]) if i > 0 else "neutral"
+        current_bear_to_bull = prior_regime == "bear" and current_signal == "bull"
+        if current_signal == "bear":
+            next_instruction = "下一交易日清仓 TQQQ；新增定投资金保留为现金"
+        elif current_bear_to_bull:
+            next_instruction = "熊转牛，下一交易日将全部现金买入 TQQQ"
+        elif (
+            current_signal == "bull"
+            and pd.notna(current_change)
+            and float(current_change) <= -dip_threshold
+        ):
+            next_instruction = "牛市回调达到阈值，下一交易日将全部现金买入 TQQQ"
+        elif current_signal == "bull":
+            next_instruction = "保持仓位，现金等待 QQQ 单日下跌达到回调阈值"
         else:
-            next_instruction = "SMA 不可用或相等，下一交易日不交易"
+            next_instruction = "状态尚未明确，保持现金并等待牛市或熊市信号"
 
         avg_cost_per_share = cost_basis / shares if shares > 0 else 0.0
         records.append(
@@ -446,11 +448,18 @@ def backtest_qqq_sma_tqqq(
                 f"qqq_sma{sma_window}": (
                     float(row["qqq_sma"]) if pd.notna(row["qqq_sma"]) else float("nan")
                 ),
-                "qqq_daily_change": (
-                    float(row["qqq_close"]) / float(data.at[i - 1, "qqq_close"]) - 1
-                    if i > 0
+                "bull_threshold": (
+                    float(row["qqq_sma"] * bull_multiplier)
+                    if pd.notna(row["qqq_sma"])
                     else float("nan")
                 ),
+                "bear_threshold": (
+                    float(row["qqq_sma"] * bear_multiplier)
+                    if pd.notna(row["qqq_sma"])
+                    else float("nan")
+                ),
+                "market_regime": current_signal,
+                "qqq_daily_change": float(current_change) if pd.notna(current_change) else float("nan"),
                 "tqqq_open": float(row["tqqq_open"]),
                 "tqqq_close": float(row["tqqq_close"]),
                 "tqqq_daily_change": (
@@ -510,11 +519,49 @@ def backtest_qqq_sma_tqqq(
     profit = final_value - total_contributions
 
     current_position = str(latest["position_status"])
-    latest_signal = str(latest["close_signal"])
-    next_decision = determine_next_action(
+    latest_signal = str(latest["market_regime"])
+    latest_change = float(latest["qqq_daily_change"])
+    latest_bear_to_bull = (
+        len(daily) > 1
+        and str(daily.iloc[-2]["market_regime"]) == "bear"
+        and latest_signal == "bull"
+    )
+    available_cash = float(latest["cash"])
+    if latest_signal == "bear" and current_position == "TQQQ":
+        next_decision = {
+            "action": "sell",
+            "action_text": "卖出全部 TQQQ",
+            "reason": f"QQQ 已跌破 SMA{sma_window}×{bear_multiplier:.2f}，进入熊市",
+        }
+    elif available_cash > 0 and latest_bear_to_bull:
+        next_decision = {
+            "action": "buy",
+            "action_text": "用全部现金买入 TQQQ",
+            "reason": f"QQQ 熊转牛并突破 SMA{sma_window}×{bull_multiplier:.2f}",
+        }
+    elif (
+        available_cash > 0
+        and latest_signal == "bull"
+        and latest_change <= -dip_threshold
+    ):
+        next_decision = {
+            "action": "buy",
+            "action_text": "用全部现金买入 TQQQ",
+            "reason": f"牛市中 QQQ 单日下跌 {abs(latest_change):.2%}，达到回调阈值",
+        }
+    else:
+        next_decision = {
+            "action": "hold",
+            "action_text": "不交易",
+            "reason": str(latest["next_day_instruction"]),
+        }
+    next_decision["signal_text"] = _regime_signal_text(
         latest_signal,
-        current_position,
+        float(latest["qqq_close"]),
+        latest[f"qqq_sma{sma_window}"],
         sma_window,
+        bull_multiplier,
+        bear_multiplier,
     )
 
     today_action = str(latest["action"])
@@ -530,6 +577,9 @@ def backtest_qqq_sma_tqqq(
         "initial_capital": float(initial_capital),
         "monthly_contribution": float(monthly_contribution),
         "sma_window": int(sma_window),
+        "bull_multiplier": float(bull_multiplier),
+        "bear_multiplier": float(bear_multiplier),
+        "dip_threshold": float(dip_threshold),
         "commission_rate": float(commission_rate),
         "slippage_rate": float(slippage_rate),
         "sell_fee_rate": float(sell_fee_rate),
@@ -667,7 +717,7 @@ def plot_daily_curve(daily, filename="sma200_daily_curve.png"):
         label="Total contributions",
         linewidth=1.2,
     )
-    ax.set_title(f"QQQ SMA{sma_label} Timing Strategy")
+    ax.set_title(f"QQQ SMA{sma_label} Regime / TQQQ Dip-Buy Strategy")
     ax.set_xlabel("Date")
     ax.set_ylabel("Value (million)")
     ax.grid(alpha=0.25)

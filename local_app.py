@@ -238,7 +238,7 @@ def build_dashboard(sma_window=200):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>QQQ SMA{sma_window} 模拟交易</title>
+  <title>QQQ 牛熊缓冲 / TQQQ 回调买入策略</title>
   <style>
     :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
     body {{ max-width: 1180px; margin: auto; padding: 28px 18px 48px; background: Canvas; color: CanvasText; }}
@@ -259,7 +259,7 @@ def build_dashboard(sma_window=200):
   </style>
 </head>
 <body>
-  <h1>QQQ SMA{sma_window} 模拟交易</h1>
+  <h1>QQQ 牛熊缓冲 / TQQQ 回调买入策略</h1>
   <div class="muted">数据截至 {latest.trade_date:%Y-%m-%d} · 图表支持缩放、区间选择、悬停明细和图片导出</div>
   <section class="grid" aria-label="模拟账户摘要">
     <div class="card"><div class="label">当前状态</div><div class="value">{signal}</div></div>
@@ -269,7 +269,8 @@ def build_dashboard(sma_window=200):
     <div class="card"><div class="label">今日策略涨跌</div><div class="value">{latest.daily_return:+.2%}</div></div>
     <div class="card"><div class="label">今日策略盈亏</div><div class="value">¥{latest.daily_profit:+,.2f}</div></div>
     <div class="card"><div class="label">下一交易日操作</div><div class="value">{summary["next_action_text"]}</div></div>
-    <div class="card"><div class="label">QQQ收盘 / SMA{sma_window}</div><div class="value">{latest.qqq_close:,.2f} / {latest[sma_column]:,.2f}</div></div>
+    <div class="card"><div class="label">市场状态</div><div class="value">{latest.market_regime}</div></div>
+    <div class="card"><div class="label">QQQ / 牛市线 / 熊市线</div><div class="value">{latest.qqq_close:,.2f} / {latest.bull_threshold:,.2f} / {latest.bear_threshold:,.2f}</div></div>
     <div class="card"><div class="label">累计交易成本</div><div class="value">¥{summary["transaction_costs_paid_or_estimated"]:,.2f}</div></div>
     <div class="card"><div class="label">最大回撤</div><div class="value">{summary["max_drawdown"]:.2%}</div></div>
   </section>
@@ -319,7 +320,7 @@ def serve(port):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="本地 QQQ SMA 模拟交易")
+    parser = argparse.ArgumentParser(description="本地 QQQ 牛熊缓冲 / TQQQ 回调买入策略")
     parser.add_argument("--refresh", action="store_true", help="先更新行情")
     parser.add_argument("--serve", action="store_true", help="启动本地网页")
     parser.add_argument("--port", type=int, default=8000, help="网页端口")
