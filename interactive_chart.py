@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -794,42 +795,63 @@ def build_interactive_market_chart(
       const chart = document.getElementById('equity-chart');
       const stage = document.getElementById('chart-stage');
       const end = new Date('__LATEST_DATE__T00:00:00');
+      const defaultStart = new Date('__DEFAULT_START_DATE__T00:00:00');
+      const equitySeries = __EQUITY_SERIES__;
       const axes = ['xaxis','xaxis2'];
       let yScaleTimer;
+      function eventRange(event={}) {
+        for (const axis of axes) {
+          if (event[axis + '.autorange'] === true) return [null,null];
+          const range = event[axis + '.range'];
+          if (Array.isArray(range) && range.length >= 2) return range;
+          const start = event[axis + '.range[0]'];
+          const finish = event[axis + '.range[1]'];
+          if (start !== undefined && finish !== undefined) return [start,finish];
+        }
+        return null;
+      }
       function autoScaleAccount(startValue,endValue) {
         const start = startValue ? new Date(startValue).getTime() : -Infinity;
         const finish = endValue ? new Date(endValue).getTime() : Infinity;
-        const targetNames = new Set(['累计投入','QQQ 定投基准','策略账户']);
         const values = [];
-        chart.data.forEach(trace => {
-          if (!targetNames.has(trace.name) || !trace.x || !trace.y) return;
-          for (let i=0;i<trace.x.length;i+=1) {
-            const time = new Date(trace.x[i]).getTime();
-            const value = Number(trace.y[i]);
-            if (time >= start && time <= finish && Number.isFinite(value)) values.push(value);
+        for (let i=0;i<equitySeries.dates.length;i+=1) {
+          const time = new Date(equitySeries.dates[i]).getTime();
+          if (time < start || time > finish) continue;
+          for (const series of [equitySeries.strategy,equitySeries.benchmark,equitySeries.contributions]) {
+            const value = Number(series[i]);
+            if (Number.isFinite(value)) values.push(value);
           }
-        });
+        }
         if (!values.length) return;
         const low = Math.min(...values), high = Math.max(...values);
         const padding = Math.max((high-low)*0.08,high*0.015,1);
         Plotly.relayout(chart,{'yaxis.range':[Math.max(0,low-padding),high+padding]});
       }
+      function scheduleAutoScale(range,delay=45) {
+        clearTimeout(yScaleTimer);
+        yScaleTimer=setTimeout(() => autoScaleAccount(range[0],range[1]),delay);
+      }
       function setRange(months) {
         const update = {};
-        if (months === 'all') axes.forEach(axis => update[axis + '.autorange'] = true);
+        let range;
+        if (months === 'all') {
+          axes.forEach(axis => update[axis + '.autorange'] = true);
+          range=[null,null];
+        }
         else {
           const start = new Date(end); start.setMonth(start.getMonth() - Number(months));
           axes.forEach(axis => update[axis + '.range'] = [start.toISOString(),end.toISOString()]);
+          range=[start,end];
         }
         Plotly.relayout(chart,update);
+        scheduleAutoScale(range,0);
         document.querySelectorAll('[data-range]').forEach(button => button.classList.toggle('active',button.dataset.range === String(months)));
       }
+      chart.on('plotly_relayouting',event => {
+        const range=eventRange(event); if (range) scheduleAutoScale(range,25);
+      });
       chart.on('plotly_relayout',event => {
-        const start = event['xaxis.range[0]'] ?? event['xaxis2.range[0]'];
-        const finish = event['xaxis.range[1]'] ?? event['xaxis2.range[1]'];
-        if (start === undefined || finish === undefined) return;
-        clearTimeout(yScaleTimer);
-        yScaleTimer=setTimeout(() => autoScaleAccount(start,finish),70);
+        const range=eventRange(event); if (range) scheduleAutoScale(range,0);
       });
       document.querySelectorAll('[data-range]').forEach(button => button.addEventListener('click',() => setRange(button.dataset.range)));
       document.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click',() => {
@@ -846,6 +868,7 @@ def build_interactive_market_chart(
         document.getElementById('fullscreen').textContent=document.fullscreenElement?'退出全屏':'全屏';
         setTimeout(() => Plotly.Plots.resize(chart),120);
       });
+      requestAnimationFrame(() => scheduleAutoScale([defaultStart,end],0));
     })();
   </script>
 </body>
@@ -853,6 +876,17 @@ def build_interactive_market_chart(
 """
     replacements = {
         "__LATEST_DATE__": f"{latest['trade_date']:%Y-%m-%d}",
+        "__DEFAULT_START_DATE__": f"{default_start:%Y-%m-%d}",
+        "__EQUITY_SERIES__": json.dumps(
+            {
+                "dates": data["trade_date"].dt.strftime("%Y-%m-%d").tolist(),
+                "strategy": data["total_value"].astype(float).tolist(),
+                "benchmark": data["qqq_benchmark_value"].astype(float).tolist(),
+                "contributions": data["total_contributions"].astype(float).tolist(),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
         "__FINAL_VALUE__": f"{final_value:,.0f}",
         "__CONTRIBUTIONS__": f"{total_contributions:,.0f}",
         "__PROFIT__": f"{profit:+,.0f}",
