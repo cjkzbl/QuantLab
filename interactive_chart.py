@@ -716,6 +716,7 @@ def build_interactive_market_chart(
         config={
             "responsive": True,
             "displaylogo": False,
+            "displayModeBar": False,
             "scrollZoom": False,
             "doubleClick": "reset",
             "modeBarButtonsToRemove": [
@@ -772,10 +773,9 @@ def build_interactive_market_chart(
   <main class="stage" id="chart-stage">
     <header class="top">
       <div class="top-row">
-        <div><div class="title">账户收益曲线</div><div class="hint">拖动下方时间导航条缩放 · Y轴自动适配可见区间 · 数据截至 __LATEST_DATE__</div></div>
+        <div><div class="title">账户收益曲线</div><div class="hint">鼠标拖动平移 · 滚轮缩放时间 · Y轴自动适配可见区间 · 数据截至 __LATEST_DATE__</div></div>
         <div class="controls">
           <div class="group"><button data-range="3">3月</button><button data-range="6">6月</button><button data-range="12">1年</button><button class="active" data-range="36">3年</button><button data-range="all">全部</button></div>
-          <div class="group"><button class="active" data-mode="pan">拖动平移</button><button data-mode="zoom">框选缩放</button></div>
           <button class="action" id="reset-view">复位</button><button class="action" id="fullscreen">全屏</button><button class="action" id="export-image">导出</button>
         </div>
       </div>
@@ -797,7 +797,10 @@ def build_interactive_market_chart(
       const end = new Date('__LATEST_DATE__T00:00:00');
       const defaultStart = new Date('__DEFAULT_START_DATE__T00:00:00');
       const equitySeries = __EQUITY_SERIES__;
+      const fullStart = new Date(equitySeries.dates[0] + 'T00:00:00');
+      const fullEnd = new Date(equitySeries.dates[equitySeries.dates.length-1] + 'T00:00:00');
       const axes = ['xaxis','xaxis2'];
+      let activeRange = [defaultStart,end];
       let yScaleTimer;
       function eventRange(event={}) {
         for (const axis of axes) {
@@ -831,33 +834,62 @@ def build_interactive_market_chart(
         clearTimeout(yScaleTimer);
         yScaleTimer=setTimeout(() => autoScaleAccount(range[0],range[1]),delay);
       }
+      function applyTimeRange(range) {
+        activeRange=range;
+        const update={};
+        axes.forEach(axis => update[axis + '.range']=[range[0].toISOString(),range[1].toISOString()]);
+        Plotly.relayout(chart,update);
+        scheduleAutoScale(range,0);
+      }
       function setRange(months) {
         const update = {};
         let range;
         if (months === 'all') {
           axes.forEach(axis => update[axis + '.autorange'] = true);
-          range=[null,null];
+          range=[fullStart,fullEnd];
         }
         else {
           const start = new Date(end); start.setMonth(start.getMonth() - Number(months));
           axes.forEach(axis => update[axis + '.range'] = [start.toISOString(),end.toISOString()]);
           range=[start,end];
         }
+        activeRange=range;
         Plotly.relayout(chart,update);
         scheduleAutoScale(range,0);
         document.querySelectorAll('[data-range]').forEach(button => button.classList.toggle('active',button.dataset.range === String(months)));
       }
       chart.on('plotly_relayouting',event => {
-        const range=eventRange(event); if (range) scheduleAutoScale(range,25);
+        const range=eventRange(event);
+        if (range) {
+          activeRange=range[0] ? [new Date(range[0]),new Date(range[1])] : [fullStart,fullEnd];
+          scheduleAutoScale(activeRange,25);
+        }
       });
       chart.on('plotly_relayout',event => {
-        const range=eventRange(event); if (range) scheduleAutoScale(range,0);
+        const range=eventRange(event);
+        if (range) {
+          activeRange=range[0] ? [new Date(range[0]),new Date(range[1])] : [fullStart,fullEnd];
+          scheduleAutoScale(activeRange,0);
+        }
       });
+      chart.addEventListener('wheel',event => {
+        event.preventDefault();
+        const start=activeRange[0].getTime(),finish=activeRange[1].getTime();
+        const span=finish-start;
+        const bounds=chart.getBoundingClientRect();
+        const ratio=Math.min(1,Math.max(0,(event.clientX-bounds.left)/bounds.width));
+        const anchor=start+span*ratio;
+        const factor=event.deltaY > 0 ? 1.22 : 0.82;
+        const minSpan=7*24*60*60*1000;
+        const maxSpan=fullEnd.getTime()-fullStart.getTime();
+        const nextSpan=Math.min(maxSpan,Math.max(minSpan,span*factor));
+        let nextStart=anchor-(anchor-start)*(nextSpan/span);
+        let nextFinish=nextStart+nextSpan;
+        if (nextStart < fullStart.getTime()) { nextStart=fullStart.getTime(); nextFinish=nextStart+nextSpan; }
+        if (nextFinish > fullEnd.getTime()) { nextFinish=fullEnd.getTime(); nextStart=nextFinish-nextSpan; }
+        applyTimeRange([new Date(nextStart),new Date(nextFinish)]);
+      },{passive:false});
       document.querySelectorAll('[data-range]').forEach(button => button.addEventListener('click',() => setRange(button.dataset.range)));
-      document.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click',() => {
-        Plotly.relayout(chart,{dragmode:button.dataset.mode});
-        document.querySelectorAll('[data-mode]').forEach(item => item.classList.toggle('active',item === button));
-      }));
       document.getElementById('reset-view').addEventListener('click',() => setRange('36'));
       document.getElementById('fullscreen').addEventListener('click',async () => {
         if (!document.fullscreenElement) await stage.requestFullscreen(); else await document.exitFullscreen();
