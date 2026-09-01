@@ -279,6 +279,93 @@ def _build_return_heatmap(daily):
     )
 
 
+def _build_start_date_sensitivity(qqq, tqqq, bil, sma_window):
+    """逐年改变资金投入起点，生成起始时间敏感性结果和网页片段。"""
+    common_dates = set(pd.to_datetime(qqq["trade_date"]).dt.normalize())
+    common_dates &= set(pd.to_datetime(tqqq["trade_date"]).dt.normalize())
+    common_dates &= set(pd.to_datetime(bil["trade_date"]).dt.normalize())
+    if not common_dates:
+        raise ValueError("没有可用于起始时间敏感性分析的共同交易日")
+
+    first_date = min(common_dates)
+    last_date = max(common_dates)
+    results = []
+    for year in range(first_date.year, last_date.year + 1):
+        requested_start = pd.Timestamp(year=year, month=1, day=1)
+        if requested_start > last_date:
+            continue
+        cohort_daily, _, cohort_summary = backtest_qqq_sma_tqqq(
+            qqq,
+            tqqq,
+            bil,
+            sma_window=sma_window,
+            start_date=max(requested_start, first_date),
+        )
+        actual_start = pd.Timestamp(cohort_summary["start_date"])
+        elapsed_years = max((last_date - actual_start).days / 365.2425, 1 / 365.2425)
+        strategy_growth = float((1.0 + cohort_daily["daily_return"]).prod())
+        benchmark_growth = float(
+            (1.0 + cohort_daily["qqq_benchmark_daily_return"]).prod()
+        )
+        annualized_return = strategy_growth ** (1.0 / elapsed_years) - 1.0
+        benchmark_annualized = benchmark_growth ** (1.0 / elapsed_years) - 1.0
+        results.append(
+            {
+                "start_year": year,
+                "start_date": actual_start,
+                "end_date": pd.Timestamp(cohort_summary["end_date"]),
+                "elapsed_years": elapsed_years,
+                "total_contributions": float(cohort_summary["total_contributions"]),
+                "final_value": float(cohort_summary["final_value"]),
+                "return_on_contributions": float(cohort_summary["return_rate"]),
+                "annualized_return": annualized_return,
+                "qqq_annualized_return": benchmark_annualized,
+                "annualized_excess_return": annualized_return - benchmark_annualized,
+                "max_drawdown": float(cohort_summary["max_drawdown"]),
+            }
+        )
+
+    sensitivity = pd.DataFrame(results)
+    max_abs_return = max(float(sensitivity["annualized_return"].abs().max()), 0.01)
+    best = sensitivity.loc[sensitivity["annualized_return"].idxmax()]
+    worst = sensitivity.loc[sensitivity["annualized_return"].idxmin()]
+    spread = float(best["annualized_return"] - worst["annualized_return"])
+    baseline = sensitivity.iloc[0]
+    rows = []
+    for row in sensitivity.iloc[::-1].itertuples(index=False):
+        width = min(abs(row.annualized_return) / max_abs_return * 100.0, 100.0)
+        tone = "gain" if row.annualized_return >= 0 else "loss"
+        rows.append(
+            "<tr>"
+            f"<td><strong>{row.start_year}</strong><span class=\"date-note\">{row.start_date:%Y-%m-%d}</span></td>"
+            f"<td>{row.elapsed_years:.1f} 年</td>"
+            f"<td>¥{row.total_contributions:,.0f}</td>"
+            f"<td>¥{row.final_value:,.0f}</td>"
+            f"<td class=\"{'positive' if row.return_on_contributions >= 0 else 'negative'}\">{row.return_on_contributions:+.1%}</td>"
+            f"<td><div class=\"sensitivity-value {tone}\">{row.annualized_return:+.1%}</div>"
+            f"<div class=\"sensitivity-track\"><i class=\"{tone}\" style=\"width:{width:.1f}%\"></i></div></td>"
+            f"<td class=\"{'positive' if row.qqq_annualized_return >= 0 else 'negative'}\">{row.qqq_annualized_return:+.1%}</td>"
+            f"<td class=\"{'positive' if row.annualized_excess_return >= 0 else 'negative'}\">{row.annualized_excess_return:+.1%}</td>"
+            f"<td class=\"negative\">{row.max_drawdown:.1%}</td>"
+            "</tr>"
+        )
+
+    html_fragment = f"""
+      <div class="sensitivity-summary">
+        <article><span>年化收益最高</span><strong class="positive">{best['annualized_return']:+.1%}</strong><small>{int(best['start_year'])} 年开始</small></article>
+        <article><span>年化收益最低</span><strong class="{'positive' if worst['annualized_return'] >= 0 else 'negative'}">{worst['annualized_return']:+.1%}</strong><small>{int(worst['start_year'])} 年开始</small></article>
+        <article><span>起点结果跨度</span><strong>{spread:.1%}</strong><small>最高与最低年化收益之差</small></article>
+        <article><span>{int(baseline['start_year'])} 年基准</span><strong>{baseline['annualized_return']:+.1%}</strong><small>时间加权年化收益</small></article>
+      </div>
+      <div class="panel table-panel sensitivity-panel"><table>
+        <thead><tr><th>开始年份</th><th>回测长度</th><th>累计投入</th><th>最终资产</th><th>投入回报</th><th>策略年化</th><th>QQQ年化</th><th>年化超额</th><th>最大回撤</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table></div>
+      <p class="method-note">年化收益按剔除每月新增资金影响后的每日收益复合计算；“投入回报”是最终资产 ÷ 累计投入 − 1。每组都从当年首个共同交易日投入，SMA 使用开始日前行情预热。不同回测长度不可只比较最终资产。</p>
+    """
+    return sensitivity, html_fragment
+
+
 def build_dashboard(sma_window=200):
     """运行模拟回测，生成本地报告和静态网页。"""
     qqq = load_data("qqq_daily.csv")
@@ -289,6 +376,9 @@ def build_dashboard(sma_window=200):
         tqqq,
         bil,
         sma_window=sma_window,
+    )
+    sensitivity, sensitivity_html = _build_start_date_sensitivity(
+        qqq, tqqq, bil, sma_window
     )
 
     PUBLIC_DIR.mkdir(exist_ok=True)
@@ -303,6 +393,13 @@ def build_dashboard(sma_window=200):
         PUBLIC_DIR / "interactive_market_chart.html",
     )
     save_reports(daily, trades, summary)
+    sensitivity.to_csv(
+        REPORT_DIR / "start_date_sensitivity.csv", index=False, encoding="utf-8-sig"
+    )
+    shutil.copy2(
+        REPORT_DIR / "start_date_sensitivity.csv",
+        PUBLIC_REPORT_DIR / "start_date_sensitivity.csv",
+    )
 
     latest = daily.iloc[-1]
     sma_column = next(column for column in daily.columns if column.startswith("qqq_sma"))
@@ -414,6 +511,15 @@ def build_dashboard(sma_window=200):
     .heatmap-legend {{ display:flex; align-items:center; justify-content:flex-end; gap:18px; padding:8px 7px 1px; color:var(--muted); font-size:11px; }}
     .heatmap-legend span {{ display:flex; align-items:center; gap:6px; }}
     .heatmap-legend i {{ width:10px; height:10px; border-radius:3px; }} .legend-loss {{ background:var(--red); }} .legend-gain {{ background:var(--green); }}
+    .sensitivity-summary {{ display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:12px; }}
+    .sensitivity-summary article {{ padding:16px 18px;border:1px solid var(--line);border-radius:15px;background:linear-gradient(145deg,#111a2b,#0b111d); }}
+    .sensitivity-summary span,.sensitivity-summary small {{ display:block;color:var(--muted);font-size:11px; }}
+    .sensitivity-summary strong {{ display:block;margin:9px 0 5px;font-size:24px;font-variant-numeric:tabular-nums; }}
+    .sensitivity-panel {{ max-height:610px; }} .sensitivity-panel thead th {{ position:sticky;top:0;z-index:2;background:#111a2b; }}
+    .date-note {{ display:block;margin-top:3px;color:var(--muted);font-size:10px;font-weight:400; }}
+    .sensitivity-value {{ font-weight:750; }} .sensitivity-track {{ width:88px;height:4px;margin:5px 0 0 auto;border-radius:99px;background:#ffffff0c;overflow:hidden; }}
+    .sensitivity-track i {{ display:block;height:100%;border-radius:inherit; }} .sensitivity-track i.gain {{ background:var(--green); }} .sensitivity-track i.loss {{ background:var(--red); }}
+    .method-note {{ margin:10px 4px 0;color:var(--muted);font-size:11px;line-height:1.6; }}
     table {{ width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;white-space:nowrap; }}
     th,td {{ padding:13px 10px;border-bottom:1px solid #ffffff0d;text-align:right;font-size:13px; }}
     th {{ color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:650; }}
@@ -422,7 +528,7 @@ def build_dashboard(sma_window=200):
     .trade-badge.buy {{ color:#61e7b2;background:#35d39918; }} .trade-badge.sell {{ color:#ff8da0;background:#fb718518; }}
     .footer {{ display:flex;justify-content:space-between;gap:20px;margin-top:28px;padding:22px 0;border-top:1px solid #ffffff10;color:var(--muted);font-size:12px; }}
     details summary {{ cursor:pointer;padding:17px 20px;font-weight:650; }} details img {{ width:100%;height:auto;display:block; }}
-    @media(max-width:980px) {{ .hero,.split {{ grid-template-columns:1fr; }} .kpi-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
+    @media(max-width:980px) {{ .hero,.split {{ grid-template-columns:1fr; }} .kpi-grid,.sensitivity-summary {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
     @media(max-width:620px) {{ .shell {{ width:min(100% - 24px,1440px); }} .top-links {{ display:none; }} .hero {{ padding-top:30px; }} .kpi-grid {{ grid-template-columns:1fr; }}
       .status-card {{ padding:18px; }} .threshold {{ gap:4px; }} .threshold strong {{ font-size:12px; }} .panel-head,.section-head {{ align-items:flex-start; }} .panel-head {{ padding:15px; }} .footer {{ flex-direction:column; }} }}
   </style>
@@ -432,7 +538,7 @@ def build_dashboard(sma_window=200):
     <header class="topbar">
       <a class="brand" href="#top"><span class="brand-mark">Q</span><span>QuantLab</span></a>
       <nav class="top-links" aria-label="主导航">
-        <a href="#overview">账户概览</a><a href="#chart">策略图表</a><a href="#returns">收益格子</a><a href="#rules">交易规则</a><a href="#trades">交易记录</a>
+        <a href="#overview">账户概览</a><a href="#chart">策略图表</a><a href="#start-sensitivity">起点分析</a><a href="#returns">收益格子</a><a href="#rules">交易规则</a><a href="#trades">交易记录</a>
       </nav>
     </header>
 
@@ -477,6 +583,11 @@ def build_dashboard(sma_window=200):
     <section id="chart">
       <div class="section-head"><div><h2>账户收益曲线</h2><p>策略账户为主线，QQQ定投和累计投入作为对照；下方时间导航条可直接拖动缩放。</p></div><a class="button" href="interactive_market_chart.html" target="_blank" rel="noopener">全屏图表 ↗</a></div>
       <div class="panel"><iframe src="interactive_market_chart.html" loading="lazy" title="策略账户收益、QQQ基准、回撤与仓位图"></iframe></div>
+    </section>
+
+    <section id="start-sensitivity">
+      <div class="section-head"><div><h2>起始时间敏感性</h2><p>把资金投入起点逐年后移，检验策略结果是否依赖 2010 年这一特定起点。</p></div><a class="button" href="reports/start_date_sensitivity.csv" download>下载对比 CSV</a></div>
+      {sensitivity_html}
     </section>
 
     <section id="returns">

@@ -79,6 +79,11 @@ python get_data.py
 拖动平移、框选缩放、统一悬停和 PNG 导出；
 也可以通过 `public/interactive_market_chart.html` 单独全屏打开。
 
+主页同时包含“起始时间敏感性”分析：从数据可用的首年开始，将资金投入起点
+逐年后移，比较策略与 QQQ 的时间加权年化收益、投入回报、最终资产和最大回撤。
+开始日前的 QQQ 行情只用于 SMA 预热，不会提前投入资金。完整对比结果会写入
+`reports/start_date_sensitivity.csv` 并提供网页下载。
+
 `reports` 和 `public` 都是运行时生成目录，不提交到 Git；GitHub Actions 每次运行时会重新生成。
 
 ## GitHub Actions 自动更新

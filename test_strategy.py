@@ -50,6 +50,30 @@ class MarketRegimeTests(unittest.TestCase):
         self.assertEqual(daily.iloc[-1]["position_status"], "BIL")
         self.assertEqual(summary["initial_capital"], 10_000)
 
+    def test_start_date_changes_portfolio_start_but_keeps_sma_warmup(self):
+        dates = pd.date_range("2019-01-01", periods=500, freq="D")
+        prices = [100.0] * 500
+        qqq = pd.DataFrame({"trade_date": dates, "open": prices, "close": prices})
+        tqqq = pd.DataFrame({"trade_date": dates, "open": prices, "close": prices})
+        bil = pd.DataFrame({"trade_date": dates, "open": prices, "close": prices})
+
+        daily, _, summary = backtest_qqq_sma_tqqq(
+            qqq,
+            tqqq,
+            bil,
+            start_date="2020-01-01",
+            monthly_contribution=0,
+            commission_rate=0,
+            qqq_slippage_rate=0,
+            tqqq_slippage_rate=0,
+            bil_slippage_rate=0,
+            sell_fee_rate=0,
+        )
+
+        self.assertEqual(daily.iloc[0]["trade_date"], pd.Timestamp("2020-01-01"))
+        self.assertFalse(pd.isna(daily.iloc[0]["qqq_sma200"]))
+        self.assertEqual(summary["start_date"], pd.Timestamp("2020-01-01"))
+
 
 if __name__ == "__main__":
     unittest.main()

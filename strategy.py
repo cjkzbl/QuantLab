@@ -651,8 +651,13 @@ def backtest_qqq_sma_tqqq(
     bil_slippage_rate=0.0001,
     sell_fee_rate=0.0000206,
     capital_gains_tax_rate=0.0,
+    start_date=None,
 ):
-    """回测牛市持有 TQQQ、等待或熊市阶段持有 BIL 的轮动策略。"""
+    """回测牛市持有 TQQQ、等待或熊市阶段持有 BIL 的轮动策略。
+
+    start_date 仅决定资金开始投入的日期；SMA 和牛熊状态仍使用此前的 QQQ
+    历史数据预热，避免不同起始时间因指标缺少预热期而失真。
+    """
     if initial_capital <= 0:
         raise ValueError("initial_capital 必须大于 0")
     if monthly_contribution < 0:
@@ -712,6 +717,14 @@ def backtest_qqq_sma_tqqq(
         raise ValueError("QQQ、TQQQ 与 BIL 没有共同交易日")
     if (data[price_columns] <= 0).any().any():
         raise ValueError("全部开盘价和收盘价必须大于 0")
+    if start_date is not None:
+        try:
+            requested_start = pd.Timestamp(start_date).normalize()
+        except (TypeError, ValueError) as exc:
+            raise ValueError("start_date 必须是有效日期") from exc
+        data = data[data["trade_date"] >= requested_start].reset_index(drop=True)
+        if data.empty:
+            raise ValueError("start_date 晚于可用行情的最后交易日")
 
     slippage_rates = {
         "QQQ": float(qqq_slippage_rate),
