@@ -84,6 +84,24 @@ python get_data.py
 开始日前的 QQQ 行情只用于 SMA 预热，不会提前投入资金。完整对比结果会写入
 `reports/start_date_sensitivity.csv` 并提供网页下载。
 
+首页的“起始时间风险”入口会打开 `public/start-date-risk.html`。该页面按每月首个
+共同交易日建立一次性投入样本，并使用相同的 1 年、3 年和 5 年持有窗口比较：
+
+- 1 年累计收益，3 年和 5 年年化收益；
+- 历史中位数、10/25 分位、最好和最差结果；
+- 正收益概率、跑赢同期 QQQ 的概率与最大回撤；
+- 当前年度起点相对于等持有时长历史样本的收益百分位；
+- 每个持有窗口最差的 10 个开始日期；
+- 最大回撤的窗口内回本天数与最长水下期；
+- 一次性投入与定投切换，以及定投资金加权收益；
+- 一年收益分布和牛转熊确认期间的 QQQ/TQQQ 跌幅。
+
+完整样本位于 `reports/rolling_start_lump_sum.csv`，汇总位于
+`reports/rolling_start_summary.json`；定投样本位于
+`reports/rolling_start_dca.csv`，牛转熊记录位于
+`reports/regime_transitions.csv`。可以用 `--live-start-date YYYY-MM-DD` 指定实际
+投入日期；未指定时使用最新数据所在年份的第一个共同交易日。
+
 `reports` 和 `public` 都是运行时生成目录，不提交到 Git；GitHub Actions 每次运行时会重新生成。
 
 ## GitHub Actions 自动更新

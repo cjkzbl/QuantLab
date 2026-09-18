@@ -635,6 +635,58 @@ def backtest_qqq_sma_tqqq_cash(
     return daily, trades, summary
 
 
+def prepare_backtest_data(
+    qqq_df,
+    tqqq_df,
+    bil_df,
+    sma_window=200,
+    bull_multiplier=1.04,
+    bear_multiplier=0.97,
+):
+    """预先整理回测行情，供多个起点重复使用。"""
+    required_columns = {"trade_date", "open", "close"}
+    frames = {"QQQ": qqq_df, "TQQQ": tqqq_df, "BIL": bil_df}
+    for symbol, frame in frames.items():
+        if not required_columns.issubset(frame.columns):
+            raise ValueError(f"{symbol} 数据必须包含 trade_date、open 和 close 列")
+
+    prepared = {}
+    for symbol, frame in frames.items():
+        item = frame[["trade_date", "open", "close"]].copy()
+        item["trade_date"] = pd.to_datetime(item["trade_date"])
+        item = item.sort_values("trade_date").drop_duplicates("trade_date")
+        prefix = symbol.lower()
+        prepared[symbol] = item.rename(
+            columns={"open": f"{prefix}_open", "close": f"{prefix}_close"}
+        )
+
+    qqq = prepared["QQQ"]
+    qqq["qqq_sma"] = moving_average(qqq, sma_window, "qqq_close")
+    qqq["qqq_daily_change"] = qqq["qqq_close"].pct_change()
+    qqq["market_regime"] = market_regimes(
+        qqq["qqq_close"], qqq["qqq_sma"], bull_multiplier, bear_multiplier
+    )
+    data = qqq.merge(prepared["TQQQ"], on="trade_date", how="inner")
+    data = data.merge(prepared["BIL"], on="trade_date", how="inner")
+    price_columns = [
+        "qqq_open",
+        "qqq_close",
+        "tqqq_open",
+        "tqqq_close",
+        "bil_open",
+        "bil_close",
+    ]
+    data = data.dropna(subset=price_columns).reset_index(drop=True)
+    if data.empty:
+        raise ValueError("QQQ、TQQQ 与 BIL 没有共同交易日")
+    if (data[price_columns] <= 0).any().any():
+        raise ValueError("全部开盘价和收盘价必须大于 0")
+    data.attrs["sma_window"] = int(sma_window)
+    data.attrs["bull_multiplier"] = float(bull_multiplier)
+    data.attrs["bear_multiplier"] = float(bear_multiplier)
+    return data
+
+
 def backtest_qqq_sma_tqqq(
     qqq_df,
     tqqq_df,
@@ -680,43 +732,14 @@ def backtest_qqq_sma_tqqq(
     if any(rate < 0 or rate >= 1 for rate in rates):
         raise ValueError("费率和税率必须在 [0, 1) 范围内")
 
-    required_columns = {"trade_date", "open", "close"}
-    frames = {"QQQ": qqq_df, "TQQQ": tqqq_df, "BIL": bil_df}
-    for symbol, frame in frames.items():
-        if not required_columns.issubset(frame.columns):
-            raise ValueError(f"{symbol} 数据必须包含 trade_date、open 和 close 列")
-
-    prepared = {}
-    for symbol, frame in frames.items():
-        item = frame[["trade_date", "open", "close"]].copy()
-        item["trade_date"] = pd.to_datetime(item["trade_date"])
-        item = item.sort_values("trade_date").drop_duplicates("trade_date")
-        prefix = symbol.lower()
-        prepared[symbol] = item.rename(
-            columns={"open": f"{prefix}_open", "close": f"{prefix}_close"}
-        )
-
-    qqq = prepared["QQQ"]
-    qqq["qqq_sma"] = moving_average(qqq, sma_window, "qqq_close")
-    qqq["qqq_daily_change"] = qqq["qqq_close"].pct_change()
-    qqq["market_regime"] = market_regimes(
-        qqq["qqq_close"], qqq["qqq_sma"], bull_multiplier, bear_multiplier
+    data = prepare_backtest_data(
+        qqq_df,
+        tqqq_df,
+        bil_df,
+        sma_window=sma_window,
+        bull_multiplier=bull_multiplier,
+        bear_multiplier=bear_multiplier,
     )
-    data = qqq.merge(prepared["TQQQ"], on="trade_date", how="inner")
-    data = data.merge(prepared["BIL"], on="trade_date", how="inner")
-    price_columns = [
-        "qqq_open",
-        "qqq_close",
-        "tqqq_open",
-        "tqqq_close",
-        "bil_open",
-        "bil_close",
-    ]
-    data = data.dropna(subset=price_columns).reset_index(drop=True)
-    if data.empty:
-        raise ValueError("QQQ、TQQQ 与 BIL 没有共同交易日")
-    if (data[price_columns] <= 0).any().any():
-        raise ValueError("全部开盘价和收盘价必须大于 0")
     if start_date is not None:
         try:
             requested_start = pd.Timestamp(start_date).normalize()

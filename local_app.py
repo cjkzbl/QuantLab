@@ -10,6 +10,7 @@ import pandas as pd
 
 from get_data import load_data, refresh_and_save_market_data
 from interactive_chart import build_interactive_market_chart
+from risk_analysis import analyze_start_date_risk
 from strategy import backtest_qqq_sma_tqqq, plot_daily_curve, report_tables
 
 
@@ -44,6 +45,18 @@ def _format_value(value, kind):
     if kind == "percent":
         return f"{float(value):+.2%}"
     return html.escape(str(value))
+
+
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if value is pd.NaT or pd.isna(value):
+        return None
+    return value.item() if hasattr(value, "item") else value
 
 
 def _write_table_page(filename, title, dataframe, columns):
@@ -366,7 +379,189 @@ def _build_start_date_sensitivity(qqq, tqqq, bil, sma_window):
     return sensitivity, html_fragment
 
 
-def build_dashboard(sma_window=200):
+def _histogram_svg(values, current_value=None):
+    values = [float(value) for value in values]
+    series = pd.Series(values)
+    actual_low, actual_high = min(values), max(values)
+    low = float(series.quantile(0.05))
+    high = float(series.quantile(0.95))
+    if high - low < 0.01:
+        low, high = actual_low, actual_high
+    span = max(high - low, 0.01)
+    low -= span * 0.025
+    high += span * 0.025
+    bins = 20
+    counts = [0] * bins
+    for value in values:
+        index = min(max(int((value - low) / (high - low) * bins), 0), bins - 1)
+        counts[index] += 1
+    width, height, left, right, bottom, top = 1000, 330, 58, 58, 48, 72
+    chart_width = width - left - right
+    chart_height = height - top - bottom
+    bar_width = chart_width / bins
+    max_count = max(counts)
+    bars = []
+    for index, count in enumerate(counts):
+        bar_height = count / max_count * chart_height
+        x = left + index * bar_width + 2
+        y = top + chart_height - bar_height
+        bin_low = low + (high - low) * index / bins
+        bin_high = low + (high - low) * (index + 1) / bins
+        if index == 0:
+            range_label = f"≤ {bin_high:+.1%}（包含左侧极端值）"
+        elif index == bins - 1:
+            range_label = f"≥ {bin_low:+.1%}（包含右侧极端值）"
+        else:
+            range_label = f"{bin_low:+.1%} 至 {bin_high:+.1%}"
+        color = "#f7bf58" if index in {0, bins - 1} else "#4f8cff"
+        bars.append(
+            f'<rect class="hist-bar" x="{x:.1f}" y="{y:.1f}" width="{bar_width - 4:.1f}" height="{bar_height:.1f}" rx="4" fill="{color}" opacity=".78"><title>{range_label}：{count} 个起点（{count / len(values):.1%}）</title></rect>'
+        )
+
+    def marker(value, label, color, level, dashed=False):
+        clipped = min(max(value, low), high)
+        x = left + (clipped - low) / (high - low) * chart_width
+        dash = ' stroke-dasharray="5 4"' if dashed else ""
+        return (
+            f'<line x1="{x:.1f}" y1="{top - 4}" x2="{x:.1f}" y2="{top + chart_height}" stroke="{color}" stroke-width="2"{dash}/>'
+            f'<text x="{x:.1f}" y="{18 + level * 16}" fill="{color}" text-anchor="middle" font-size="11">{label} {value:+.1%}</text>'
+        )
+
+    markers = [
+        marker(float(series.median()), "中位", "#35d399", 0),
+        marker(float(series.quantile(0.25)), "P25", "#f7bf58", 1),
+        marker(float(series.quantile(0.10)), "P10", "#fb7185", 2),
+    ]
+    if current_value is not None:
+        markers.append(marker(float(current_value), "当前", "#ffffff", 3, True))
+
+    cumulative = 0
+    cdf_points = []
+    for index, count in enumerate(counts):
+        cumulative += count
+        x = left + (index + 0.5) * bar_width
+        y = top + chart_height * (1.0 - cumulative / len(values))
+        cdf_points.append(f"{x:.1f},{y:.1f}")
+    cdf = (
+        f'<polyline points="{" ".join(cdf_points)}" fill="none" stroke="#46d6db" stroke-width="2.5" stroke-linejoin="round" opacity=".95"/>'
+    )
+    grid = "".join(
+        f'<line x1="{left}" y1="{top + chart_height * fraction:.1f}" x2="{left + chart_width}" y2="{top + chart_height * fraction:.1f}" stroke="#ffffff" opacity=".07"/>'
+        for fraction in (0.25, 0.5, 0.75, 1.0)
+    )
+    ticks = []
+    for index in range(5):
+        value = low + (high - low) * index / 4
+        x = left + chart_width * index / 4
+        ticks.append(
+            f'<text x="{x:.1f}" y="{height-19}" fill="#8c9ab1" text-anchor="middle" font-size="11">{value:+.0%}</text>'
+        )
+    annotations = (
+        f'<text x="{left}" y="{height-3}" fill="#6f7d94" font-size="10">横轴显示 P5–P95；黄色柱包含两侧极端值</text>'
+        f'<text x="{width-right+8}" y="{top+4}" fill="#46d6db" font-size="10">累计 100%</text>'
+        f'<text x="{width-right+8}" y="{top+chart_height/2:.1f}" fill="#46d6db" font-size="10">50%</text>'
+        f'<text x="{width-right+8}" y="{top+chart_height:.1f}" fill="#46d6db" font-size="10">0%</text>'
+        f'<text x="{width-right}" y="{height-3}" fill="#8c9ab1" text-anchor="end" font-size="10">最差 {actual_low:+.1%} · 最好 {actual_high:+.1%}</text>'
+    )
+    return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="一年收益分布">{grid}{"".join(bars)}{cdf}{"".join(markers)}{"".join(ticks)}{annotations}</svg>'
+
+
+def _build_start_date_risk_page(results, summaries, current, transitions):
+    """生成滚动起点、投资方式和牛熊切换风险页面。"""
+    mode_names = {"lump_sum": "一次性投入", "dca": "定投"}
+    current_panels = []
+    summary_panels = []
+    histogram_panels = []
+    table_panels = []
+    for mode, mode_name in mode_names.items():
+        snapshot = current[mode]
+        percentile = (
+            f"{snapshot['return_percentile']:.0%}"
+            if pd.notna(snapshot["return_percentile"])
+            else "样本不足"
+        )
+        current_return = (
+            snapshot["cagr"] if snapshot["is_full_year"] else snapshot["total_return"]
+        )
+        return_label = "年化收益" if snapshot["is_full_year"] else "成立以来收益"
+        mwr_note = (
+            f"资金加权 {snapshot['money_weighted_return']:+.1%}"
+            if mode == "dca"
+            else f"{snapshot['observations']} 个交易日"
+        )
+        current_panels.append(
+            f"""<section class="mode-panel current{' active' if mode == 'lump_sum' else ''}" data-mode="{mode}">
+              <div><span>实际开始</span><strong>{snapshot['start_date']:%Y-%m-%d}</strong><small>截至 {snapshot['end_date']:%Y-%m-%d}</small></div>
+              <div><span>{return_label}</span><strong class="{'positive' if current_return >= 0 else 'negative'}">{current_return:+.1%}</strong><small>{mwr_note}</small></div>
+              <div><span>最大回撤</span><strong class="negative">{snapshot['max_drawdown']:.1%}</strong><small>时间加权净值</small></div>
+              <div><span>同期 QQQ</span><strong>{snapshot['qqq_total_return']:+.1%}</strong><small>累计收益</small></div>
+              <div><span>历史收益百分位</span><strong>{percentile}</strong><small>{snapshot['matched_sample_count']} 个等时长样本</small></div>
+            </section>"""
+        )
+        one_year = results[(results["mode"] == mode) & (results["horizon_years"] == 1)]
+        marker = snapshot["total_return"] if snapshot["is_full_year"] else None
+        histogram_panels.append(
+            f"""<div class="mode-panel histogram{' active' if mode == 'lump_sum' else ''}" data-mode="{mode}">{_histogram_svg(one_year['display_return'], marker)}
+            <p class="note">{'当前起点未满一年，因此不放入完整 1 年分布中；当前卡片使用等时长历史百分位。' if marker is None else '白线标记当前起点的一年结果。'}</p></div>"""
+        )
+
+    for item in summaries.itertuples(index=False):
+        mode, horizon = item.mode, int(item.horizon_years)
+        label = "累计收益" if horizon == 1 else "年化收益"
+        mwr = (
+            f'<article><span>资金加权收益中位数</span><strong>{item.median_money_weighted_return:+.1%}</strong><small>DCA 投资者体验</small></article>'
+            if mode == "dca"
+            else ""
+        )
+        summary_panels.append(
+            f"""<section class="risk-panel{' active' if mode == 'lump_sum' and horizon == 1 else ''}" data-mode="{mode}" data-horizon="{horizon}"><div class="metrics">
+              <article><span>历史样本</span><strong>{item.sample_count}</strong><small>月度起点</small></article>
+              <article><span>{label}中位数</span><strong>{item.median:+.1%}</strong><small>平均 {item.mean:+.1%}</small></article>
+              <article><span>10% 较差情形</span><strong>{item.p10:+.1%}</strong><small>25 分位 {item.p25:+.1%}</small></article>
+              <article><span>最差 / 最好</span><strong>{item.worst:+.1%}</strong><small>{item.best:+.1%}</small></article>
+              <article><span>正收益 / 跑赢 QQQ</span><strong>{item.positive_rate:.1%}</strong><small>{item.outperformance_rate:.1%}</small></article>
+              <article><span>中位 / 最差回撤</span><strong class="negative">{item.median_max_drawdown:.1%}</strong><small>{item.worst_max_drawdown:.1%}</small></article>
+              <article><span>窗口内恢复比例</span><strong>{item.recovery_rate:.1%}</strong><small>中位回本 {item.median_recovery_days:.0f} 个交易日</small></article>
+              <article><span>中位最长水下期</span><strong>{item.median_underwater_days:.0f}</strong><small>交易日</small></article>{mwr}
+            </div></section>"""
+        )
+        group = results[(results["mode"] == mode) & (results["horizon_years"] == horizon)].sort_values("display_return")
+        rows = []
+        for row in group.itertuples(index=False):
+            recovery_text = (
+                f"{int(row.recovery_days)} 日"
+                if row.recovered_within_window
+                else "未恢复"
+            )
+            recovery_sort = row.recovery_days if row.recovered_within_window else 1_000_000
+            rows.append(
+                f'<tr data-return="{row.display_return}" data-drawdown="{row.max_drawdown}" data-recovery="{recovery_sort}"><td>{row.start_date:%Y-%m-%d}</td><td>{row.end_date:%Y-%m-%d}</td><td>{row.display_return:+.1%}</td><td>{row.max_drawdown:.1%}</td><td>{recovery_text}</td><td>{row.max_underwater_days} 日</td><td>{row.qqq_display_return:+.1%}</td><td>{row.excess_return:+.1%}</td></tr>'
+            )
+        table_panels.append(
+            f"""<div class="risk-panel table-panel{' active' if mode == 'lump_sum' and horizon == 1 else ''}" data-mode="{mode}" data-horizon="{horizon}"><div class="table-wrap"><table><thead><tr><th>开始</th><th>结束</th><th>{label}</th><th>最大回撤</th><th>回本</th><th>最长水下</th><th>QQQ</th><th>超额</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></div>"""
+        )
+
+    transition_rows = "".join(
+        f"<tr><td>{row.peak_date:%Y-%m-%d}</td><td>{row.signal_date:%Y-%m-%d}</td><td>{row.execution_date:%Y-%m-%d}</td><td>{row.days_to_exit} 日</td><td>{row.qqq_peak_to_exit:+.1%}</td><td class=\"negative\">{row.tqqq_peak_to_exit:+.1%}</td></tr>"
+        for row in transitions.itertuples(index=False)
+    )
+    page = f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>起始时间风险 · QuantLab</title>
+<style>:root{{color-scheme:dark;font-family:Inter,"Segoe UI",system-ui,sans-serif;--bg:#070b14;--line:#22304a;--text:#f4f7fb;--muted:#8c9ab1;--green:#35d399;--red:#fb7185}}*{{box-sizing:border-box}}body{{margin:0;background:radial-gradient(circle at 12% 0,#173765 0,transparent 32rem),var(--bg);color:var(--text)}}a{{color:inherit;text-decoration:none}}.shell{{width:min(1280px,calc(100% - 32px));margin:auto;padding:24px 0 48px}}.top{{display:flex;justify-content:space-between;align-items:center;gap:16px}}.back,.note,small{{color:var(--muted)}}.button{{padding:10px 14px;border:1px solid #4f8cff66;border-radius:10px;background:#4f8cff16;font-size:13px;font-weight:700}}h1{{margin:46px 0 10px;font-size:clamp(32px,5vw,58px);letter-spacing:-.05em}}.lede{{max-width:850px;color:#aebbd0;line-height:1.7}}h2{{margin:34px 0 6px}}.note{{margin:0 0 14px;font-size:13px;line-height:1.6}}.tabs{{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}}.tabs button{{cursor:pointer;padding:9px 18px;border:1px solid var(--line);border-radius:999px;color:var(--muted);background:#0b1220}}.tabs button.active{{color:#fff;border-color:#4f8cff88;background:#4f8cff24}}.current,.metrics article,.table-wrap,.histogram{{border:1px solid var(--line);background:linear-gradient(145deg,#111b2c,#0b111d);border-radius:16px}}.current{{display:none;grid-template-columns:repeat(5,1fr);overflow:hidden}}.current.active{{display:grid}}.current div{{padding:20px;border-right:1px solid var(--line)}}span,small{{display:block;font-size:11px}}strong{{display:block;margin:9px 0 5px;font-size:24px;font-variant-numeric:tabular-nums}}.metrics{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}}.metrics article{{padding:17px}}.mode-panel,.risk-panel{{display:none}}.mode-panel.active,.risk-panel.active{{display:block}}.positive{{color:var(--green)}}.negative{{color:var(--red)}}.histogram{{padding:10px 16px}}.histogram svg{{width:100%;height:auto;display:block}}.hist-bar{{transition:opacity .15s ease,filter .15s ease}}.hist-bar:hover{{opacity:1;filter:brightness(1.25)}}.table-wrap{{overflow:auto;padding:0 18px 12px}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:13px 10px;border-bottom:1px solid #ffffff0d;text-align:right;font-size:13px}}th{{color:var(--muted);font-size:11px}}th:first-child,td:first-child{{text-align:left}}.table-panel tbody tr:nth-child(n+11){{display:none}}.warning{{padding:15px 18px;border:1px solid #f7bf5844;border-radius:13px;background:#f7bf5810;color:#e8c985;font-size:13px;line-height:1.65}}footer{{margin-top:32px;padding-top:20px;border-top:1px solid #ffffff12;color:var(--muted);font-size:12px;line-height:1.6}}@media(max-width:800px){{.current.active{{grid-template-columns:1fr 1fr}}.metrics{{grid-template-columns:1fr 1fr}}}}@media(max-width:520px){{.current.active,.metrics{{grid-template-columns:1fr}}}}</style></head><body><main class="shell">
+<div class="top"><a class="back" href="index.html">← 返回策略首页</a><a class="button" id="download-link" href="reports/rolling_start_lump_sum.csv" download>下载当前模式 CSV</a></div><h1>起点会怎样改变投资体验？</h1><p class="lede">固定持有期回答收益差异，回本时间和水下期回答过程是否难以坚持。一次性投入衡量纯粹的起点风险；定投同时展示时间加权收益和资金加权收益。</p>
+<div class="tabs"><button class="active" data-mode-tab="lump_sum">一次性投入</button><button data-mode-tab="dca">定投</button></div>
+<h2>当前起点</h2><p class="note">未满一年不做年化；百分位使用相同交易日数量的、更早且不与当前窗口重叠的历史样本。</p>{''.join(current_panels)}
+<h2>固定窗口摘要</h2><div class="tabs"><button class="active" data-horizon-tab="1">1 年</button><button data-horizon-tab="3">3 年</button><button data-horizon-tab="5">5 年</button></div>{''.join(summary_panels)}
+<h2>1 年收益分布</h2>{''.join(histogram_panels)}
+<h2>最差的 10 个起点</h2><p class="note">可按收益、最大回撤或回本时间重新排序；“未恢复”表示固定窗口结束时仍未回到前高。</p><div class="tabs sort-tabs"><button class="active" data-sort="return">按收益</button><button data-sort="drawdown">按回撤</button><button data-sort="recovery">按回本时间</button></div>{''.join(table_panels)}
+<h2>牛转熊：信号确认前会损失多少？</h2><div class="warning">策略必须等 QQQ 收盘确认跌破熊市线，随后在下一交易日开盘退出。TQQQ 的杠杆和每日再平衡会放大峰值至退出之间的损失，这属于策略规则内无法消除的确认成本。</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>牛市峰值</th><th>熊市信号</th><th>实际退出</th><th>峰值至退出</th><th>QQQ跌幅</th><th>TQQQ跌幅</th></tr></thead><tbody>{transition_rows}</tbody></table></div>
+<footer>时间加权收益用于比较策略本身；DCA 的资金加权收益按每笔实际投入和期末资产计算。SMA 使用起点前行情预热，信号仍在下一交易日开盘执行。历史回测不代表未来收益。</footer></main>
+<script>let mode='lump_sum',horizon='1',sortKey='return';const refresh=()=>{{document.querySelectorAll('[data-mode-tab]').forEach(x=>x.classList.toggle('active',x.dataset.modeTab===mode));document.querySelectorAll('[data-horizon-tab]').forEach(x=>x.classList.toggle('active',x.dataset.horizonTab===horizon));document.querySelectorAll('.mode-panel').forEach(x=>x.classList.toggle('active',x.dataset.mode===mode));document.querySelectorAll('.risk-panel').forEach(x=>x.classList.toggle('active',x.dataset.mode===mode&&x.dataset.horizon===horizon));document.getElementById('download-link').href=`reports/rolling_start_${{mode}}.csv`;sortRows();}};const sortRows=()=>{{const panel=[...document.querySelectorAll('.table-panel')].find(x=>x.dataset.mode===mode&&x.dataset.horizon===horizon);if(!panel)return;const body=panel.querySelector('tbody'),rows=[...body.rows],key=sortKey==='return'?'return':sortKey==='drawdown'?'drawdown':'recovery';rows.sort((a,b)=>sortKey==='recovery'?Number(b.dataset[key])-Number(a.dataset[key]):Number(a.dataset[key])-Number(b.dataset[key]));rows.forEach(r=>body.appendChild(r));document.querySelectorAll('[data-sort]').forEach(x=>x.classList.toggle('active',x.dataset.sort===sortKey));}};document.querySelectorAll('[data-mode-tab]').forEach(x=>x.onclick=()=>{{mode=x.dataset.modeTab;refresh()}});document.querySelectorAll('[data-horizon-tab]').forEach(x=>x.onclick=()=>{{horizon=x.dataset.horizonTab;refresh()}});document.querySelectorAll('[data-sort]').forEach(x=>x.onclick=()=>{{sortKey=x.dataset.sort;sortRows()}});</script></body></html>"""
+    output = PUBLIC_DIR / "start-date-risk.html"
+    output.write_text(page, encoding="utf-8")
+    return output
+
+
+def build_dashboard(sma_window=200, live_start_date=None):
     """运行模拟回测，生成本地报告和静态网页。"""
     qqq = load_data("qqq_daily.csv")
     tqqq = load_data("tqqq_daily.csv")
@@ -379,6 +574,15 @@ def build_dashboard(sma_window=200):
     )
     sensitivity, sensitivity_html = _build_start_date_sensitivity(
         qqq, tqqq, bil, sma_window
+    )
+    rolling, rolling_summary, current_by_mode, transitions = analyze_start_date_risk(
+        qqq, tqqq, bil, sma_window=sma_window, live_start_date=live_start_date
+    )
+    current_start = current_by_mode["lump_sum"]
+    current_percentile_text = (
+        f"{current_start['return_percentile']:.0%}"
+        if pd.notna(current_start["return_percentile"])
+        else "样本不足"
     )
 
     PUBLIC_DIR.mkdir(exist_ok=True)
@@ -399,6 +603,40 @@ def build_dashboard(sma_window=200):
     shutil.copy2(
         REPORT_DIR / "start_date_sensitivity.csv",
         PUBLIC_REPORT_DIR / "start_date_sensitivity.csv",
+    )
+    for mode in ("lump_sum", "dca"):
+        rolling[rolling["mode"] == mode].to_csv(
+            REPORT_DIR / f"rolling_start_{mode}.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+    rolling_summary.to_json(
+        REPORT_DIR / "rolling_start_summary.json", orient="records", indent=2
+    )
+    (REPORT_DIR / "current_start_comparison.json").write_text(
+        json.dumps(
+            _json_safe(current_by_mode),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    for filename in (
+        "rolling_start_lump_sum.csv",
+        "rolling_start_dca.csv",
+        "rolling_start_summary.json",
+        "current_start_comparison.json",
+    ):
+        shutil.copy2(REPORT_DIR / filename, PUBLIC_REPORT_DIR / filename)
+    transitions.to_csv(
+        REPORT_DIR / "regime_transitions.csv", index=False, encoding="utf-8-sig"
+    )
+    shutil.copy2(
+        REPORT_DIR / "regime_transitions.csv",
+        PUBLIC_REPORT_DIR / "regime_transitions.csv",
+    )
+    _build_start_date_risk_page(
+        rolling, rolling_summary, current_by_mode, transitions
     )
 
     latest = daily.iloc[-1]
@@ -586,8 +824,17 @@ def build_dashboard(sma_window=200):
     </section>
 
     <section id="start-sensitivity">
-      <div class="section-head"><div><h2>起始时间敏感性</h2><p>把资金投入起点逐年后移，检验策略结果是否依赖 2010 年这一特定起点。</p></div><a class="button" href="reports/start_date_sensitivity.csv" download>下载对比 CSV</a></div>
-      {sensitivity_html}
+      <div class="section-head"><div><h2>起始时间风险</h2><p>按月度起点比较固定 1、3、5 年窗口，避免不同持有长度造成误判。</p></div><a class="button primary" href="start-date-risk.html">打开完整分析 →</a></div>
+      <div class="sensitivity-summary">
+        <article><span>当前起点</span><strong>{current_start['start_date']:%Y-%m-%d}</strong><small>截至 {current_start['end_date']:%Y-%m-%d}</small></article>
+        <article><span>当前累计收益</span><strong class="{'positive' if current_start['total_return'] >= 0 else 'negative'}">{current_start['total_return']:+.1%}</strong><small>未满一年不年化</small></article>
+        <article><span>当前最大回撤</span><strong class="negative">{current_start['max_drawdown']:.1%}</strong><small>时间加权净值</small></article>
+        <article><span>等时长历史百分位</span><strong>{current_percentile_text}</strong><small>{current_start['matched_sample_count']} 个历史样本</small></article>
+      </div>
+      <details class="panel" style="margin-top:12px">
+        <summary>查看旧版逐年起点至今分析（各组持有期不同，仅作辅助）</summary>
+        <div style="padding:0 16px 16px">{sensitivity_html}</div>
+      </details>
     </section>
 
     <section id="returns">
@@ -645,11 +892,17 @@ def main():
     parser.add_argument("--serve", action="store_true", help="启动本地网页")
     parser.add_argument("--port", type=int, default=8000, help="网页端口")
     parser.add_argument("--sma-window", type=int, default=200, help="SMA 周期，默认 200")
+    parser.add_argument(
+        "--live-start-date",
+        help="当前实盘起始日期（YYYY-MM-DD），默认当年第一个交易日",
+    )
     args = parser.parse_args()
 
     if args.refresh:
         refresh_market_data()
-    output, summary = build_dashboard(sma_window=args.sma_window)
+    output, summary = build_dashboard(
+        sma_window=args.sma_window, live_start_date=args.live_start_date
+    )
     print(f"页面已生成：{output.resolve()}")
     print(f"详细账本已生成：{REPORT_DIR.resolve()}")
     print(
