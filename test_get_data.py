@@ -2,10 +2,29 @@ import unittest
 
 import pandas as pd
 
-from get_data import validate_market_data
+from get_data import validate_market_data, validate_treasury_data
 
 
 class MarketDataValidationTests(unittest.TestCase):
+    def test_treasury_data_must_cover_1999(self):
+        frame = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["1999-03-09", "1999-03-10"]),
+                "yield_percent": [4.5, 4.6],
+            }
+        )
+        result = validate_treasury_data(frame)
+        self.assertEqual(result["treasury_rows"], 2)
+        with self.assertRaisesRegex(ValueError, "无法覆盖"):
+            validate_treasury_data(
+                pd.DataFrame(
+                    {
+                        "trade_date": pd.to_datetime(["1999-03-11"]),
+                        "yield_percent": [4.6],
+                    }
+                )
+            )
+
     def test_three_etfs_must_share_latest_trade_date(self):
         dates = pd.to_datetime(["2026-08-18", "2026-08-19"])
         frame = pd.DataFrame({"trade_date": dates, "close": [1.0, 1.1]})

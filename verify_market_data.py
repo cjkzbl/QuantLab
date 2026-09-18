@@ -1,6 +1,6 @@
 import argparse
 
-from get_data import load_data, validate_market_data
+from get_data import load_data, validate_market_data, validate_treasury_data
 
 
 def main():
@@ -14,12 +14,13 @@ def main():
         load_data("bil_daily.csv"),
         max_age_days=args.max_age_days,
     )
+    result.update(validate_treasury_data(load_data("treasury_3m_daily.csv")))
     print(
         "CSV 校验通过："
         f"最新交易日={result['latest_date']}，"
         f"距今天={result['age_days']} 天，"
         f"QQQ={result['qqq_rows']} 行，TQQQ={result['tqqq_rows']} 行，"
-        f"BIL={result['bil_rows']} 行"
+        f"BIL={result['bil_rows']} 行，国债利率={result['treasury_rows']} 行"
     )
 
 

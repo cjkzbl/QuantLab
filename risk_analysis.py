@@ -248,6 +248,8 @@ def _run_lump_sum_path(prepared, start_date, end_date=None):
 def _build_cohorts(
     prepared,
     matched_requests=None,
+    history_scope="real",
+    synthetic_cutoff=None,
 ):
     last_date = pd.Timestamp(prepared["trade_date"].max())
     results = []
@@ -310,6 +312,11 @@ def _build_cohorts(
                 results.append(
                     {
                         "mode": mode,
+                        "history_scope": history_scope,
+                        "contains_synthetic": bool(
+                            synthetic_cutoff is not None
+                            and actual_start < pd.Timestamp(synthetic_cutoff)
+                        ),
                         "horizon_years": horizon,
                         **metrics,
                         "money_weighted_return": xirr(cash_flows),
@@ -340,13 +347,16 @@ def summarize_rolling_results(results):
     working = results.copy()
     if "mode" not in working:
         working["mode"] = "lump_sum"
+    if "history_scope" not in working:
+        working["history_scope"] = "real"
     summaries = []
-    for (mode, horizon), group in working.groupby(
-        ["mode", "horizon_years"], sort=True
+    for (scope, mode, horizon), group in working.groupby(
+        ["history_scope", "mode", "horizon_years"], sort=True
     ):
         values = group["display_return"].astype(float)
         summaries.append(
             {
+                "history_scope": scope,
                 "mode": mode,
                 "horizon_years": int(horizon),
                 "sample_count": int(len(group)),
@@ -422,7 +432,13 @@ def current_start_snapshot(
 
 
 def analyze_start_date_risk(
-    qqq, tqqq, bil, sma_window=200, live_start_date=None
+    qqq,
+    tqqq,
+    bil,
+    sma_window=200,
+    live_start_date=None,
+    history_scope="real",
+    synthetic_cutoff=None,
 ):
     """一次遍历生成第一阶段需要的滚动样本、摘要和当前起点。"""
     prepared = prepare_backtest_data(qqq, tqqq, bil, sma_window=sma_window)
@@ -434,6 +450,8 @@ def analyze_start_date_risk(
     }
     results, matched_returns = _build_cohorts(
         prepared,
+        history_scope=history_scope,
+        synthetic_cutoff=synthetic_cutoff,
         matched_requests={
             mode: {
                 "observations": snapshot["observations"],
@@ -451,6 +469,13 @@ def analyze_start_date_risk(
             else math.nan
         )
     transitions = build_regime_transition_analysis(prepared)
+    transitions["history_scope"] = history_scope
+    if synthetic_cutoff is not None:
+        transitions["contains_synthetic"] = transitions["peak_date"] < pd.Timestamp(
+            synthetic_cutoff
+        )
+    else:
+        transitions["contains_synthetic"] = False
     return results, summarize_rolling_results(results), current, transitions
 
 

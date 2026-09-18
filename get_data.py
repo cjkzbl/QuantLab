@@ -6,6 +6,9 @@ import pandas as pd
 from quantdash import QuantDash
 
 
+TREASURY_3M_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS3MO"
+
+
 def _get_daily_data(symbol):
     """获取指定美股标的从上市至今的后复权日线行情。"""
     api_key = os.getenv("QUANTDASH_API_KEY")
@@ -40,6 +43,42 @@ def get_tqqq_data():
 def get_bil_data():
     """获取 BIL 从上市至今的后复权日线行情。"""
     return _get_daily_data("BIL.US")
+
+
+def get_treasury_3m_data():
+    """获取 FRED 三个月期美国国债每日年化收益率。"""
+    frame = pd.read_csv(TREASURY_3M_URL)
+    frame = frame.rename(
+        columns={
+            "observation_date": "trade_date",
+            "DATE": "trade_date",
+            "DGS3MO": "yield_percent",
+        }
+    )
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
+    frame["yield_percent"] = pd.to_numeric(frame["yield_percent"], errors="coerce")
+    return frame.dropna().sort_values("trade_date").drop_duplicates("trade_date")
+
+
+def validate_treasury_data(frame, required_start="1999-03-10"):
+    """确认国债收益率足以覆盖 QQQ 历史且数值合理。"""
+    if frame.empty or not {"trade_date", "yield_percent"}.issubset(frame.columns):
+        raise ValueError("三个月期国债收益率数据为空或缺少必要列")
+    dates = pd.to_datetime(frame["trade_date"], errors="coerce")
+    values = pd.to_numeric(frame["yield_percent"], errors="coerce")
+    if dates.isna().any() or values.isna().any():
+        raise ValueError("三个月期国债收益率包含无效数据")
+    if dates.duplicated().any() or not dates.is_monotonic_increasing:
+        raise ValueError("三个月期国债收益率日期重复或未升序排列")
+    if dates.iloc[0] > pd.Timestamp(required_start):
+        raise ValueError("三个月期国债收益率无法覆盖 1999 年起的历史")
+    if not values.between(0, 30).all():
+        raise ValueError("三个月期国债收益率超出合理范围")
+    return {
+        "treasury_rows": int(len(frame)),
+        "treasury_start_date": dates.iloc[0].strftime("%Y-%m-%d"),
+        "treasury_latest_date": dates.iloc[-1].strftime("%Y-%m-%d"),
+    }
 
 
 def save_data(df, filename):
@@ -158,10 +197,11 @@ def save_market_data_pair(
 
 
 def refresh_and_save_market_data(max_age_days=7):
-    """同时下载三只 ETF，验证后持久化到正式 CSV。"""
+    """同时下载三只 ETF 与国债收益率，验证后持久化到正式 CSV。"""
     qqq = get_qqq_data()
     tqqq = get_tqqq_data()
     bil = get_bil_data()
+    treasury = get_treasury_3m_data()
     expected = validate_market_data(
         qqq, tqqq, bil, max_age_days=max_age_days
     )
@@ -169,8 +209,10 @@ def refresh_and_save_market_data(max_age_days=7):
         "QQQ": Path("qqq_daily.csv"),
         "TQQQ": Path("tqqq_daily.csv"),
         "BIL": Path("bil_daily.csv"),
+        "TREASURY": Path("treasury_3m_daily.csv"),
     }
-    frames = {"QQQ": qqq, "TQQQ": tqqq, "BIL": bil}
+    frames = {"QQQ": qqq, "TQQQ": tqqq, "BIL": bil, "TREASURY": treasury}
+    treasury_expected = validate_treasury_data(treasury)
     temp_paths = {
         symbol: path.with_name(f".{path.name}.tmp") for symbol, path in paths.items()
     }
@@ -185,17 +227,24 @@ def refresh_and_save_market_data(max_age_days=7):
         )
         if saved != expected:
             raise RuntimeError("CSV 写入后校验结果与下载数据不一致")
+        if (
+            validate_treasury_data(load_data(temp_paths["TREASURY"]))
+            != treasury_expected
+        ):
+            raise RuntimeError("国债收益率 CSV 写入后校验结果不一致")
         for symbol, path in paths.items():
             temp_paths[symbol].replace(path)
     finally:
         for temp_path in temp_paths.values():
             temp_path.unlink(missing_ok=True)
-    return validate_market_data(
+    result = validate_market_data(
         load_data(paths["QQQ"]),
         load_data(paths["TQQQ"]),
         load_data(paths["BIL"]),
         max_age_days=max_age_days,
     )
+    result.update(validate_treasury_data(load_data(paths["TREASURY"])))
+    return result
 
 
 if __name__ == "__main__":
@@ -204,5 +253,5 @@ if __name__ == "__main__":
         "行情已更新并校验："
         f"交易日={result['latest_date']}，"
         f"QQQ={result['qqq_rows']} 行，TQQQ={result['tqqq_rows']} 行，"
-        f"BIL={result['bil_rows']} 行"
+        f"BIL={result['bil_rows']} 行，国债利率={result['treasury_rows']} 行"
     )

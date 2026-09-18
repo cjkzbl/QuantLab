@@ -11,6 +11,7 @@ import pandas as pd
 from get_data import load_data, refresh_and_save_market_data
 from interactive_chart import build_interactive_market_chart
 from risk_analysis import analyze_start_date_risk
+from synthetic_history import build_extended_market_data
 from strategy import backtest_qqq_sma_tqqq, plot_daily_curve, report_tables
 
 
@@ -20,13 +21,13 @@ PUBLIC_REPORT_DIR = PUBLIC_DIR / "reports"
 
 
 def refresh_market_data():
-    """重新获取并保存 QQQ、TQQQ 后复权行情。"""
+    """重新获取并保存 ETF 行情与国债收益率。"""
     result = refresh_and_save_market_data(max_age_days=7)
     print(
-        "两份 CSV 已更新并重新校验："
+        "市场数据已更新并重新校验："
         f"最新交易日={result['latest_date']}，"
         f"QQQ={result['qqq_rows']} 行，TQQQ={result['tqqq_rows']} 行，"
-        f"BIL={result['bil_rows']} 行"
+        f"BIL={result['bil_rows']} 行，国债利率={result['treasury_rows']} 行"
     )
     return result
 
@@ -466,15 +467,17 @@ def _histogram_svg(values, current_value=None):
     return f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="一年收益分布">{grid}{"".join(bars)}{cdf}{"".join(markers)}{"".join(ticks)}{annotations}</svg>'
 
 
-def _build_start_date_risk_page(results, summaries, current, transitions):
+def _build_start_date_risk_page(results, summaries, current_by_scope, transitions, validation):
     """生成滚动起点、投资方式和牛熊切换风险页面。"""
     mode_names = {"lump_sum": "一次性投入", "dca": "定投"}
     current_panels = []
     summary_panels = []
     histogram_panels = []
     table_panels = []
-    for mode, mode_name in mode_names.items():
-        snapshot = current[mode]
+    scopes = {"real": "真实历史", "extended": "扩展至 1999"}
+    for scope in scopes:
+      for mode, mode_name in mode_names.items():
+        snapshot = current_by_scope[scope][mode]
         percentile = (
             f"{snapshot['return_percentile']:.0%}"
             if pd.notna(snapshot["return_percentile"])
@@ -490,7 +493,7 @@ def _build_start_date_risk_page(results, summaries, current, transitions):
             else f"{snapshot['observations']} 个交易日"
         )
         current_panels.append(
-            f"""<section class="mode-panel current{' active' if mode == 'lump_sum' else ''}" data-mode="{mode}">
+            f"""<section class="mode-panel current{' active' if scope == 'real' and mode == 'lump_sum' else ''}" data-scope="{scope}" data-mode="{mode}">
               <div><span>实际开始</span><strong>{snapshot['start_date']:%Y-%m-%d}</strong><small>截至 {snapshot['end_date']:%Y-%m-%d}</small></div>
               <div><span>{return_label}</span><strong class="{'positive' if current_return >= 0 else 'negative'}">{current_return:+.1%}</strong><small>{mwr_note}</small></div>
               <div><span>最大回撤</span><strong class="negative">{snapshot['max_drawdown']:.1%}</strong><small>时间加权净值</small></div>
@@ -498,15 +501,15 @@ def _build_start_date_risk_page(results, summaries, current, transitions):
               <div><span>历史收益百分位</span><strong>{percentile}</strong><small>{snapshot['matched_sample_count']} 个等时长样本</small></div>
             </section>"""
         )
-        one_year = results[(results["mode"] == mode) & (results["horizon_years"] == 1)]
+        one_year = results[(results["history_scope"] == scope) & (results["mode"] == mode) & (results["horizon_years"] == 1)]
         marker = snapshot["total_return"] if snapshot["is_full_year"] else None
         histogram_panels.append(
-            f"""<div class="mode-panel histogram{' active' if mode == 'lump_sum' else ''}" data-mode="{mode}">{_histogram_svg(one_year['display_return'], marker)}
+            f"""<div class="mode-panel histogram{' active' if scope == 'real' and mode == 'lump_sum' else ''}" data-scope="{scope}" data-mode="{mode}">{_histogram_svg(one_year['display_return'], marker)}
             <p class="note">{'当前起点未满一年，因此不放入完整 1 年分布中；当前卡片使用等时长历史百分位。' if marker is None else '白线标记当前起点的一年结果。'}</p></div>"""
         )
 
     for item in summaries.itertuples(index=False):
-        mode, horizon = item.mode, int(item.horizon_years)
+        scope, mode, horizon = item.history_scope, item.mode, int(item.horizon_years)
         label = "累计收益" if horizon == 1 else "年化收益"
         mwr = (
             f'<article><span>资金加权收益中位数</span><strong>{item.median_money_weighted_return:+.1%}</strong><small>DCA 投资者体验</small></article>'
@@ -514,7 +517,7 @@ def _build_start_date_risk_page(results, summaries, current, transitions):
             else ""
         )
         summary_panels.append(
-            f"""<section class="risk-panel{' active' if mode == 'lump_sum' and horizon == 1 else ''}" data-mode="{mode}" data-horizon="{horizon}"><div class="metrics">
+            f"""<section class="risk-panel{' active' if scope == 'real' and mode == 'lump_sum' and horizon == 1 else ''}" data-scope="{scope}" data-mode="{mode}" data-horizon="{horizon}"><div class="metrics">
               <article><span>历史样本</span><strong>{item.sample_count}</strong><small>月度起点</small></article>
               <article><span>{label}中位数</span><strong>{item.median:+.1%}</strong><small>平均 {item.mean:+.1%}</small></article>
               <article><span>10% 较差情形</span><strong>{item.p10:+.1%}</strong><small>25 分位 {item.p25:+.1%}</small></article>
@@ -525,7 +528,7 @@ def _build_start_date_risk_page(results, summaries, current, transitions):
               <article><span>中位最长水下期</span><strong>{item.median_underwater_days:.0f}</strong><small>交易日</small></article>{mwr}
             </div></section>"""
         )
-        group = results[(results["mode"] == mode) & (results["horizon_years"] == horizon)].sort_values("display_return")
+        group = results[(results["history_scope"] == scope) & (results["mode"] == mode) & (results["horizon_years"] == horizon)].sort_values("display_return")
         rows = []
         for row in group.itertuples(index=False):
             recovery_text = (
@@ -535,27 +538,32 @@ def _build_start_date_risk_page(results, summaries, current, transitions):
             )
             recovery_sort = row.recovery_days if row.recovered_within_window else 1_000_000
             rows.append(
-                f'<tr data-return="{row.display_return}" data-drawdown="{row.max_drawdown}" data-recovery="{recovery_sort}"><td>{row.start_date:%Y-%m-%d}</td><td>{row.end_date:%Y-%m-%d}</td><td>{row.display_return:+.1%}</td><td>{row.max_drawdown:.1%}</td><td>{recovery_text}</td><td>{row.max_underwater_days} 日</td><td>{row.qqq_display_return:+.1%}</td><td>{row.excess_return:+.1%}</td></tr>'
+                f'<tr data-return="{row.display_return}" data-drawdown="{row.max_drawdown}" data-recovery="{recovery_sort}"><td>{row.start_date:%Y-%m-%d}{" <em>合成</em>" if row.contains_synthetic else ""}</td><td>{row.end_date:%Y-%m-%d}</td><td>{row.display_return:+.1%}</td><td>{row.max_drawdown:.1%}</td><td>{recovery_text}</td><td>{row.max_underwater_days} 日</td><td>{row.qqq_display_return:+.1%}</td><td>{row.excess_return:+.1%}</td></tr>'
             )
         table_panels.append(
-            f"""<div class="risk-panel table-panel{' active' if mode == 'lump_sum' and horizon == 1 else ''}" data-mode="{mode}" data-horizon="{horizon}"><div class="table-wrap"><table><thead><tr><th>开始</th><th>结束</th><th>{label}</th><th>最大回撤</th><th>回本</th><th>最长水下</th><th>QQQ</th><th>超额</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></div>"""
+            f"""<div class="risk-panel table-panel{' active' if scope == 'real' and mode == 'lump_sum' and horizon == 1 else ''}" data-scope="{scope}" data-mode="{mode}" data-horizon="{horizon}"><div class="table-wrap"><table><thead><tr><th>开始</th><th>结束</th><th>{label}</th><th>最大回撤</th><th>回本</th><th>最长水下</th><th>QQQ</th><th>超额</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></div>"""
         )
 
-    transition_rows = "".join(
-        f"<tr><td>{row.peak_date:%Y-%m-%d}</td><td>{row.signal_date:%Y-%m-%d}</td><td>{row.execution_date:%Y-%m-%d}</td><td>{row.days_to_exit} 日</td><td>{row.qqq_peak_to_exit:+.1%}</td><td class=\"negative\">{row.tqqq_peak_to_exit:+.1%}</td></tr>"
-        for row in transitions.itertuples(index=False)
-    )
+    transition_panels = []
+    for scope in scopes:
+        transition_rows = "".join(
+            f"<tr><td>{row.peak_date:%Y-%m-%d}{' <em>合成</em>' if row.contains_synthetic else ''}</td><td>{row.signal_date:%Y-%m-%d}</td><td>{row.execution_date:%Y-%m-%d}</td><td>{row.days_to_exit} 日</td><td>{row.qqq_peak_to_exit:+.1%}</td><td class=\"negative\">{row.tqqq_peak_to_exit:+.1%}</td></tr>"
+            for row in transitions[transitions["history_scope"] == scope].itertuples(index=False)
+        )
+        transition_panels.append(f'<div class="scope-panel transition-panel{" active" if scope == "real" else ""}" data-scope="{scope}"><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>牛市峰值</th><th>熊市信号</th><th>实际退出</th><th>峰值至退出</th><th>QQQ跌幅</th><th>TQQQ跌幅</th></tr></thead><tbody>{transition_rows}</tbody></table></div></div>')
     page = f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>起始时间风险 · QuantLab</title>
-<style>:root{{color-scheme:dark;font-family:Inter,"Segoe UI",system-ui,sans-serif;--bg:#070b14;--line:#22304a;--text:#f4f7fb;--muted:#8c9ab1;--green:#35d399;--red:#fb7185}}*{{box-sizing:border-box}}body{{margin:0;background:radial-gradient(circle at 12% 0,#173765 0,transparent 32rem),var(--bg);color:var(--text)}}a{{color:inherit;text-decoration:none}}.shell{{width:min(1280px,calc(100% - 32px));margin:auto;padding:24px 0 48px}}.top{{display:flex;justify-content:space-between;align-items:center;gap:16px}}.back,.note,small{{color:var(--muted)}}.button{{padding:10px 14px;border:1px solid #4f8cff66;border-radius:10px;background:#4f8cff16;font-size:13px;font-weight:700}}h1{{margin:46px 0 10px;font-size:clamp(32px,5vw,58px);letter-spacing:-.05em}}.lede{{max-width:850px;color:#aebbd0;line-height:1.7}}h2{{margin:34px 0 6px}}.note{{margin:0 0 14px;font-size:13px;line-height:1.6}}.tabs{{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}}.tabs button{{cursor:pointer;padding:9px 18px;border:1px solid var(--line);border-radius:999px;color:var(--muted);background:#0b1220}}.tabs button.active{{color:#fff;border-color:#4f8cff88;background:#4f8cff24}}.current,.metrics article,.table-wrap,.histogram{{border:1px solid var(--line);background:linear-gradient(145deg,#111b2c,#0b111d);border-radius:16px}}.current{{display:none;grid-template-columns:repeat(5,1fr);overflow:hidden}}.current.active{{display:grid}}.current div{{padding:20px;border-right:1px solid var(--line)}}span,small{{display:block;font-size:11px}}strong{{display:block;margin:9px 0 5px;font-size:24px;font-variant-numeric:tabular-nums}}.metrics{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}}.metrics article{{padding:17px}}.mode-panel,.risk-panel{{display:none}}.mode-panel.active,.risk-panel.active{{display:block}}.positive{{color:var(--green)}}.negative{{color:var(--red)}}.histogram{{padding:10px 16px}}.histogram svg{{width:100%;height:auto;display:block}}.hist-bar{{transition:opacity .15s ease,filter .15s ease}}.hist-bar:hover{{opacity:1;filter:brightness(1.25)}}.table-wrap{{overflow:auto;padding:0 18px 12px}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:13px 10px;border-bottom:1px solid #ffffff0d;text-align:right;font-size:13px}}th{{color:var(--muted);font-size:11px}}th:first-child,td:first-child{{text-align:left}}.table-panel tbody tr:nth-child(n+11){{display:none}}.warning{{padding:15px 18px;border:1px solid #f7bf5844;border-radius:13px;background:#f7bf5810;color:#e8c985;font-size:13px;line-height:1.65}}footer{{margin-top:32px;padding-top:20px;border-top:1px solid #ffffff12;color:var(--muted);font-size:12px;line-height:1.6}}@media(max-width:800px){{.current.active{{grid-template-columns:1fr 1fr}}.metrics{{grid-template-columns:1fr 1fr}}}}@media(max-width:520px){{.current.active,.metrics{{grid-template-columns:1fr}}}}</style></head><body><main class="shell">
+<style>:root{{color-scheme:dark;font-family:Inter,"Segoe UI",system-ui,sans-serif;--bg:#070b14;--line:#22304a;--text:#f4f7fb;--muted:#8c9ab1;--green:#35d399;--red:#fb7185}}*{{box-sizing:border-box}}body{{margin:0;background:radial-gradient(circle at 12% 0,#173765 0,transparent 32rem),var(--bg);color:var(--text)}}a{{color:inherit;text-decoration:none}}.shell{{width:min(1280px,calc(100% - 32px));margin:auto;padding:24px 0 48px}}.top{{display:flex;justify-content:space-between;align-items:center;gap:16px}}.back,.note,small{{color:var(--muted)}}.button{{padding:10px 14px;border:1px solid #4f8cff66;border-radius:10px;background:#4f8cff16;font-size:13px;font-weight:700}}h1{{margin:46px 0 10px;font-size:clamp(32px,5vw,58px);letter-spacing:-.05em}}.lede{{max-width:850px;color:#aebbd0;line-height:1.7}}h2{{margin:34px 0 6px}}.note{{margin:0 0 14px;font-size:13px;line-height:1.6}}.tabs{{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}}.tabs button{{cursor:pointer;padding:9px 18px;border:1px solid var(--line);border-radius:999px;color:var(--muted);background:#0b1220}}.tabs button.active{{color:#fff;border-color:#4f8cff88;background:#4f8cff24}}.current,.metrics article,.table-wrap,.histogram{{border:1px solid var(--line);background:linear-gradient(145deg,#111b2c,#0b111d);border-radius:16px}}.current{{display:none;grid-template-columns:repeat(5,1fr);overflow:hidden}}.current.active{{display:grid}}.current div{{padding:20px;border-right:1px solid var(--line)}}span,small{{display:block;font-size:11px}}strong{{display:block;margin:9px 0 5px;font-size:24px;font-variant-numeric:tabular-nums}}.metrics{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}}.metrics article{{padding:17px}}.mode-panel,.risk-panel,.scope-panel{{display:none}}.mode-panel.active,.risk-panel.active,.scope-panel.active{{display:block}}.positive{{color:var(--green)}}.negative{{color:var(--red)}}.histogram{{padding:10px 16px}}.histogram svg{{width:100%;height:auto;display:block}}.hist-bar{{transition:opacity .15s ease,filter .15s ease}}.hist-bar:hover{{opacity:1;filter:brightness(1.25)}}.table-wrap{{overflow:auto;padding:0 18px 12px}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:13px 10px;border-bottom:1px solid #ffffff0d;text-align:right;font-size:13px}}th{{color:var(--muted);font-size:11px}}th:first-child,td:first-child{{text-align:left}}em{{font-style:normal;font-size:10px;color:#f7bf58;border:1px solid #f7bf5866;border-radius:999px;padding:2px 5px}}.table-panel tbody tr:nth-child(n+11){{display:none}}.warning{{padding:15px 18px;border:1px solid #f7bf5844;border-radius:13px;background:#f7bf5810;color:#e8c985;font-size:13px;line-height:1.65}}footer{{margin-top:32px;padding-top:20px;border-top:1px solid #ffffff12;color:var(--muted);font-size:12px;line-height:1.6}}@media(max-width:800px){{.current.active{{grid-template-columns:1fr 1fr}}.metrics{{grid-template-columns:1fr 1fr}}}}@media(max-width:520px){{.current.active,.metrics{{grid-template-columns:1fr}}}}</style></head><body><main class="shell">
 <div class="top"><a class="back" href="index.html">← 返回策略首页</a><a class="button" id="download-link" href="reports/rolling_start_lump_sum.csv" download>下载当前模式 CSV</a></div><h1>起点会怎样改变投资体验？</h1><p class="lede">固定持有期回答收益差异，回本时间和水下期回答过程是否难以坚持。一次性投入衡量纯粹的起点风险；定投同时展示时间加权收益和资金加权收益。</p>
+<div class="tabs"><button class="active" data-scope-tab="real">真实历史（默认）</button><button data-scope-tab="extended">扩展至 1999（含合成）</button></div>
+<div class="scope-panel warning" data-scope="extended">1999-03-10 至 TQQQ 上市前使用合成杠杆序列，BIL 上市前使用三个月期美债收益率作为现金代理。QQQ 自 1999-03-10 才有数据，因此最早一批起点无法取得完整的 200 日均线预热，策略会在样本足够前保持中性。合成结果用于压力测试，并不等于当时可交易的真实业绩。模型与真实 TQQQ 重叠期：日收益相关性 {validation['daily_correlation']:.3f}，日均绝对误差 {validation['daily_mae']:.2%}，年化跟踪差 {validation['annualized_tracking_difference']:+.2%}。</div>
 <div class="tabs"><button class="active" data-mode-tab="lump_sum">一次性投入</button><button data-mode-tab="dca">定投</button></div>
 <h2>当前起点</h2><p class="note">未满一年不做年化；百分位使用相同交易日数量的、更早且不与当前窗口重叠的历史样本。</p>{''.join(current_panels)}
 <h2>固定窗口摘要</h2><div class="tabs"><button class="active" data-horizon-tab="1">1 年</button><button data-horizon-tab="3">3 年</button><button data-horizon-tab="5">5 年</button></div>{''.join(summary_panels)}
 <h2>1 年收益分布</h2>{''.join(histogram_panels)}
 <h2>最差的 10 个起点</h2><p class="note">可按收益、最大回撤或回本时间重新排序；“未恢复”表示固定窗口结束时仍未回到前高。</p><div class="tabs sort-tabs"><button class="active" data-sort="return">按收益</button><button data-sort="drawdown">按回撤</button><button data-sort="recovery">按回本时间</button></div>{''.join(table_panels)}
-<h2>牛转熊：信号确认前会损失多少？</h2><div class="warning">策略必须等 QQQ 收盘确认跌破熊市线，随后在下一交易日开盘退出。TQQQ 的杠杆和每日再平衡会放大峰值至退出之间的损失，这属于策略规则内无法消除的确认成本。</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>牛市峰值</th><th>熊市信号</th><th>实际退出</th><th>峰值至退出</th><th>QQQ跌幅</th><th>TQQQ跌幅</th></tr></thead><tbody>{transition_rows}</tbody></table></div>
+<h2>牛转熊：信号确认前会损失多少？</h2><div class="warning">策略必须等 QQQ 收盘确认跌破熊市线，随后在下一交易日开盘退出。TQQQ 的杠杆和每日再平衡会放大峰值至退出之间的损失，这属于策略规则内无法消除的确认成本。</div>{''.join(transition_panels)}
 <footer>时间加权收益用于比较策略本身；DCA 的资金加权收益按每笔实际投入和期末资产计算。SMA 使用起点前行情预热，信号仍在下一交易日开盘执行。历史回测不代表未来收益。</footer></main>
-<script>let mode='lump_sum',horizon='1',sortKey='return';const refresh=()=>{{document.querySelectorAll('[data-mode-tab]').forEach(x=>x.classList.toggle('active',x.dataset.modeTab===mode));document.querySelectorAll('[data-horizon-tab]').forEach(x=>x.classList.toggle('active',x.dataset.horizonTab===horizon));document.querySelectorAll('.mode-panel').forEach(x=>x.classList.toggle('active',x.dataset.mode===mode));document.querySelectorAll('.risk-panel').forEach(x=>x.classList.toggle('active',x.dataset.mode===mode&&x.dataset.horizon===horizon));document.getElementById('download-link').href=`reports/rolling_start_${{mode}}.csv`;sortRows();}};const sortRows=()=>{{const panel=[...document.querySelectorAll('.table-panel')].find(x=>x.dataset.mode===mode&&x.dataset.horizon===horizon);if(!panel)return;const body=panel.querySelector('tbody'),rows=[...body.rows],key=sortKey==='return'?'return':sortKey==='drawdown'?'drawdown':'recovery';rows.sort((a,b)=>sortKey==='recovery'?Number(b.dataset[key])-Number(a.dataset[key]):Number(a.dataset[key])-Number(b.dataset[key]));rows.forEach(r=>body.appendChild(r));document.querySelectorAll('[data-sort]').forEach(x=>x.classList.toggle('active',x.dataset.sort===sortKey));}};document.querySelectorAll('[data-mode-tab]').forEach(x=>x.onclick=()=>{{mode=x.dataset.modeTab;refresh()}});document.querySelectorAll('[data-horizon-tab]').forEach(x=>x.onclick=()=>{{horizon=x.dataset.horizonTab;refresh()}});document.querySelectorAll('[data-sort]').forEach(x=>x.onclick=()=>{{sortKey=x.dataset.sort;sortRows()}});</script></body></html>"""
+<script>let scope='real',mode='lump_sum',horizon='1',sortKey='return';const refresh=()=>{{document.querySelectorAll('[data-scope-tab]').forEach(x=>x.classList.toggle('active',x.dataset.scopeTab===scope));document.querySelectorAll('[data-mode-tab]').forEach(x=>x.classList.toggle('active',x.dataset.modeTab===mode));document.querySelectorAll('[data-horizon-tab]').forEach(x=>x.classList.toggle('active',x.dataset.horizonTab===horizon));document.querySelectorAll('.scope-panel').forEach(x=>x.classList.toggle('active',x.dataset.scope===scope));document.querySelectorAll('.mode-panel').forEach(x=>x.classList.toggle('active',x.dataset.scope===scope&&x.dataset.mode===mode));document.querySelectorAll('.risk-panel').forEach(x=>x.classList.toggle('active',x.dataset.scope===scope&&x.dataset.mode===mode&&x.dataset.horizon===horizon));document.getElementById('download-link').href=`reports/rolling_start_${{scope==='extended'?'extended_':''}}${{mode}}.csv`;sortRows();}};const sortRows=()=>{{const panel=[...document.querySelectorAll('.table-panel')].find(x=>x.dataset.scope===scope&&x.dataset.mode===mode&&x.dataset.horizon===horizon);if(!panel)return;const body=panel.querySelector('tbody'),rows=[...body.rows],key=sortKey==='return'?'return':sortKey==='drawdown'?'drawdown':'recovery';rows.sort((a,b)=>sortKey==='recovery'?Number(b.dataset[key])-Number(a.dataset[key]):Number(a.dataset[key])-Number(b.dataset[key]));rows.forEach(r=>body.appendChild(r));document.querySelectorAll('[data-sort]').forEach(x=>x.classList.toggle('active',x.dataset.sort===sortKey));}};document.querySelectorAll('[data-scope-tab]').forEach(x=>x.onclick=()=>{{scope=x.dataset.scopeTab;refresh()}});document.querySelectorAll('[data-mode-tab]').forEach(x=>x.onclick=()=>{{mode=x.dataset.modeTab;refresh()}});document.querySelectorAll('[data-horizon-tab]').forEach(x=>x.onclick=()=>{{horizon=x.dataset.horizonTab;refresh()}});document.querySelectorAll('[data-sort]').forEach(x=>x.onclick=()=>{{sortKey=x.dataset.sort;sortRows()}});</script></body></html>"""
     output = PUBLIC_DIR / "start-date-risk.html"
     output.write_text(page, encoding="utf-8")
     return output
@@ -566,6 +574,7 @@ def build_dashboard(sma_window=200, live_start_date=None):
     qqq = load_data("qqq_daily.csv")
     tqqq = load_data("tqqq_daily.csv")
     bil = load_data("bil_daily.csv")
+    treasury = load_data("treasury_3m_daily.csv")
     daily, trades, summary = backtest_qqq_sma_tqqq(
         qqq,
         tqqq,
@@ -575,9 +584,30 @@ def build_dashboard(sma_window=200, live_start_date=None):
     sensitivity, sensitivity_html = _build_start_date_sensitivity(
         qqq, tqqq, bil, sma_window
     )
-    rolling, rolling_summary, current_by_mode, transitions = analyze_start_date_risk(
+    rolling_real, summary_real, current_by_mode, transitions_real = analyze_start_date_risk(
         qqq, tqqq, bil, sma_window=sma_window, live_start_date=live_start_date
     )
+    extended_tqqq, extended_bil, synthetic_validation = build_extended_market_data(
+        qqq, tqqq, bil, treasury
+    )
+    (
+        rolling_extended,
+        summary_extended,
+        extended_current,
+        transitions_extended,
+    ) = analyze_start_date_risk(
+        qqq,
+        extended_tqqq,
+        extended_bil,
+        sma_window=sma_window,
+        live_start_date=live_start_date,
+        history_scope="extended",
+        synthetic_cutoff=pd.Timestamp(tqqq["trade_date"].min()),
+    )
+    rolling = pd.concat([rolling_real, rolling_extended], ignore_index=True)
+    rolling_summary = pd.concat([summary_real, summary_extended], ignore_index=True)
+    transitions = pd.concat([transitions_real, transitions_extended], ignore_index=True)
+    current_by_scope = {"real": current_by_mode, "extended": extended_current}
     current_start = current_by_mode["lump_sum"]
     current_percentile_text = (
         f"{current_start['return_percentile']:.0%}"
@@ -605,8 +635,13 @@ def build_dashboard(sma_window=200, live_start_date=None):
         PUBLIC_REPORT_DIR / "start_date_sensitivity.csv",
     )
     for mode in ("lump_sum", "dca"):
-        rolling[rolling["mode"] == mode].to_csv(
+        rolling_real[rolling_real["mode"] == mode].to_csv(
             REPORT_DIR / f"rolling_start_{mode}.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        rolling_extended[rolling_extended["mode"] == mode].to_csv(
+            REPORT_DIR / f"rolling_start_extended_{mode}.csv",
             index=False,
             encoding="utf-8-sig",
         )
@@ -621,11 +656,18 @@ def build_dashboard(sma_window=200, live_start_date=None):
         ),
         encoding="utf-8",
     )
+    (REPORT_DIR / "synthetic_validation.json").write_text(
+        json.dumps(_json_safe(synthetic_validation), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     for filename in (
         "rolling_start_lump_sum.csv",
         "rolling_start_dca.csv",
+        "rolling_start_extended_lump_sum.csv",
+        "rolling_start_extended_dca.csv",
         "rolling_start_summary.json",
         "current_start_comparison.json",
+        "synthetic_validation.json",
     ):
         shutil.copy2(REPORT_DIR / filename, PUBLIC_REPORT_DIR / filename)
     transitions.to_csv(
@@ -636,7 +678,7 @@ def build_dashboard(sma_window=200, live_start_date=None):
         PUBLIC_REPORT_DIR / "regime_transitions.csv",
     )
     _build_start_date_risk_page(
-        rolling, rolling_summary, current_by_mode, transitions
+        rolling, rolling_summary, current_by_scope, transitions, synthetic_validation
     )
 
     latest = daily.iloc[-1]
