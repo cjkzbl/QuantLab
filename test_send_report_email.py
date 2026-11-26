@@ -1,63 +1,54 @@
+import io
 import json
-import os
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from send_report_email import send_email
+from send_report_email import build_message, send_email
 
 
 class DailyEmailTests(unittest.TestCase):
-    def test_email_contains_close_indicators_and_next_day_action(self):
+    def test_dry_run_uses_the_shared_allocation_and_attaches_the_ledger(self):
         summary = {
-            "end_date": "2026-08-19",
-            "sma_window": 200,
-            "bull_multiplier": 1.04,
-            "bear_multiplier": 0.97,
-            "dip_threshold": 0.01,
-            "latest_signal": "bull",
-            "latest_qqq_close": 600.0,
-            "latest_sma": 550.0,
-            "latest_qqq_daily_change": -0.012,
-            "latest_tqqq_daily_change": -0.035,
-            "latest_bil_daily_change": 0.0001,
-            "latest_daily_profit": -350.0,
-            "latest_daily_return": -0.007,
-            "today_action_text": "今日未交易",
-            "next_action": "buy",
-            "next_action_text": "用全部现金买入 TQQQ",
-            "next_action_reason": "牛市中 QQQ 单日跌幅达到回调阈值",
-            "final_value": 100000.0,
-            "qqq_benchmark_final_value": 80000.0,
-            "total_contributions": 50000.0,
-            "return_rate": 1.0,
-            "max_drawdown": -0.25,
-            "current_position": "TQQQ",
+            "strategy_id": "qqq-tqqq-5050", "end_date": "2026-11-25", "next_action": "按新目标调仓",
+            "current_weights": {"TQQQ": .2, "BIL": .4, "GLD": .4},
+            "target_weights": {"TQQQ": .25, "BIL": .375, "GLD": .375},
+            "latest_changes": {"QQQ": .01, "TQQQ": .03, "BIL": .0001, "GLD": -.02},
+            "trend_label": "防守", "qqq_close": 500., "qqq_sma": 525., "qqq_entry_line": 546.,
+            "active_volatility": .6, "volatility_sample_date": "2026-11-02", "volatility_tqqq_ratio": .50,
+            "latest_daily_return": -.007, "latest_daily_profit": -350., "latest_trade_count": 3,
+            "total_contributions": 50000., "final_value": 100000., "annualized_return": .2986, "max_drawdown": -.4186,
         }
-        with tempfile.TemporaryDirectory() as temp_dir:
-            report_dir = Path(temp_dir)
-            (report_dir / "summary.json").write_text(
-                json.dumps(summary, ensure_ascii=False), encoding="utf-8"
-            )
-            environment = {
-                "BUILD_RESULT": "success",
-                "DEPLOY_RESULT": "success",
-                "WORKFLOW_URL": "https://example.com/workflow",
-            }
-            with patch.dict(os.environ, environment, clear=False):
-                message = send_email(report_dir, dry_run=True)
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            (directory / "summary.json").write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+            (directory / "trade_details.csv").write_text("asset\nGLD\n", encoding="utf-8")
+            with patch.dict("os.environ", {"BUILD_RESULT": "success", "DEPLOY_RESULT": "success"}, clear=True):
+                with patch("send_report_email.smtplib.SMTP_SSL") as smtp:
+                    message = send_email(directory, dry_run=True)
+                    smtp.assert_not_called()
 
         plain = message.get_body(preferencelist=("plain",)).get_content()
         rich = message.get_body(preferencelist=("html",)).get_content()
-        self.assertIn("牛市｜下一交易日：用全部现金买入 TQQQ", message["Subject"])
-        self.assertIn("【前一交易日收盘指标】", plain)
-        self.assertIn("牛市确认线（SMA×1.04）：572.00", plain)
-        self.assertIn("熊市确认线（SMA×0.97）：533.50", plain)
-        self.assertIn("BIL 单日涨跌：+0.01%", plain)
-        self.assertIn("【下一交易日操作】", plain)
-        self.assertIn("用全部现金买入 TQQQ", rich)
-        self.assertIn("执行时间：下一交易日开盘", rich)
+        self.assertIn("50/50", message["Subject"])
+        self.assertIn("GLD | 40.00% | 37.50% | -2.00%", plain)
+        self.assertIn("取自 2026-11-02 收盘", plain)
+        self.assertIn("开盘目标", rich)
+        self.assertIn("37.50%", rich)
+        attachment = next(message.iter_attachments())
+        with zipfile.ZipFile(io.BytesIO(attachment.get_payload(decode=True))) as archive:
+            self.assertEqual(set(archive.namelist()), {"summary.json", "trade_details.csv"})
+
+    def test_failed_build_does_not_reuse_old_report(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)
+            (path / "summary.json").write_text('{"strategy_id":"qqq-tqqq-5050","end_date":"2026-11-25"}')
+            msg = build_message(path, "from@example.com", ["to@example.com"], build_result="failure", deploy_result="skipped")
+        self.assertIn("不可用", msg["Subject"])
+        self.assertNotIn("2026-11-25", msg.get_body(preferencelist=("plain",)).get_content())
+        self.assertEqual(list(msg.iter_attachments()), [])
 
 
 if __name__ == "__main__":

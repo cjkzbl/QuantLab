@@ -1,4 +1,5 @@
 import os
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -7,6 +8,8 @@ from quantdash import QuantDash
 
 
 TREASURY_3M_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS3MO"
+STRATEGY_DATA_DIR = Path(".market-data")
+STRATEGY_CACHE = "adjusted_prices.csv"
 
 
 def _get_daily_data(symbol):
@@ -247,11 +250,36 @@ def refresh_and_save_market_data(max_age_days=7):
     return result
 
 
+def load_strategy_market_data(directory=STRATEGY_DATA_DIR):
+    from allocation_strategy import SYMBOLS
+
+    directory = Path(directory)
+    cache = directory / STRATEGY_CACHE
+    if cache.is_file():
+        frame = load_data(cache)
+        return {symbol: frame[frame.symbol.eq(symbol)].drop(columns="symbol") for symbol in SYMBOLS}
+    files = {symbol: directory / f"{symbol.lower()}_daily.csv" for symbol in SYMBOLS}
+    if not all(path.is_file() for path in files.values()):
+        raise FileNotFoundError(f"{directory} 缺少完整的四只 ETF 行情，请运行 python local_app.py --refresh")
+    return {symbol: load_data(path) for symbol, path in files.items()}
+
+
+def refresh_strategy_market_data(directory=STRATEGY_DATA_DIR):
+    """Fetch and validate all four ETFs before atomically replacing the private cache."""
+    from allocation_strategy import SYMBOLS, validate_prices
+
+    normalized = validate_prices({symbol: _get_daily_data(f"{symbol}.US") for symbol in SYMBOLS}, max_age_days=7)
+    frames = {symbol: frame.reset_index() for symbol, frame in normalized.items()}
+    combined = pd.concat([frame.assign(symbol=symbol) for symbol, frame in frames.items()], ignore_index=True)
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=directory) as folder:
+        staged = Path(folder) / STRATEGY_CACHE
+        save_data(combined, staged)
+        staged.replace(directory / STRATEGY_CACHE)
+    print(f"四只 ETF 后复权行情已校验，最新交易日 {normalized['QQQ'].index[-1]:%Y-%m-%d}")
+    return frames
+
+
 if __name__ == "__main__":
-    result = refresh_and_save_market_data()
-    print(
-        "行情已更新并校验："
-        f"交易日={result['latest_date']}，"
-        f"QQQ={result['qqq_rows']} 行，TQQQ={result['tqqq_rows']} 行，"
-        f"BIL={result['bil_rows']} 行，国债利率={result['treasury_rows']} 行"
-    )
+    refresh_strategy_market_data()

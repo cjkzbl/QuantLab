@@ -4,4 +4,5 @@ __pycache__/
 .venv/
 /public/
 /reports/
+/.market-data/
 /sma225_daily_curve.png

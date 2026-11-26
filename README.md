@@ -1,174 +1,37 @@
-# QuantLab：QQQ 牛熊缓冲 / TQQQ-BIL 轮动策略
+# QuantLab · QQQ / TQQQ 50/50
 
-这是一个使用 QQQ、TQQQ 和短期美国国库券 ETF BIL 后复权日线数据的静态模拟项目。
+[查看策略看板](https://cjkzbl.github.io/QuantLab/)
 
-策略规则：
+本项目用 QQQ 提供趋势信号，回测 TQQQ、BIL 和 GLD 的组合。固定将资金各分一半给趋势规则和波动规则，两者的 TQQQ 目标相加，剩余资金平分给 BIL 和 GLD。
 
-- 回测起始资金 1 万元，初始买入 BIL；
-- QQQ 收盘高于 `SMA200 × 1.04` 时进入牛市；
-- QQQ 收盘低于 `SMA200 × 0.97` 时进入熊市；
-- 两条阈值之间是缓冲区，延续此前的牛熊状态，避免频繁切换；
-- 熊市中卖出 TQQQ 并买入 BIL；熊转牛时不等待回调，下一交易日卖出 BIL 并买入 TQQQ；
-- 牛市中 QQQ 单日下跌 1% 或以上时，下一交易日卖出 BIL，并将全部可用资金买入 TQQQ；
-- 每月首个交易日投入 1 万元；处于 BIL 防守仓位时新增资金继续买入 BIL；
-- 所有收盘信号均在下一交易日开盘执行，避免使用未来数据；
-- 默认按主流美国在线券商的 ETF 零佣金建模；QQQ/BIL 单边滑点 0.01%，TQQQ 单边滑点 0.05%，卖出 SEC 规费 0.00206%。滑点是用于回测的保守固定假设，实际成交会随订单规模和市场波动变化；
-- 暂不计算资本利得税；
-- 使用相同资金流、长期持有 QQQ 的结果作为基准。
+- **趋势仓。** QQQ 收盘高于 SMA200 × 1.04 时开启，低于 SMA200 时退出，中间区域延续前一状态。开启时将这一半配置给 TQQQ。
+- **波动仓。** 每月首个共同交易日收盘，用 TQQQ 最近 20 个交易日收益率的年化波动率估算仓位。仓内 TQQQ 比例为 `min(100%, 30% / 年化波动率)`，持续到下次更新。
+- **执行。** 初始投入 1 万并买入 BIL。每月首个交易日开盘投入 1 万，按当时已生效的目标配置。收盘信号从下一交易日开盘生效，模拟使用开盘价和固定滑点实现目标权重。波动仓首日收盘的新目标在次日开盘生效。
+- **成本。** 零佣金，TQQQ 单边滑点 0.05%，QQQ、BIL、GLD 单边滑点 0.01%，模型卖出费率 0.00206%，未计资本利得税和汇率变动。长期基准按同一现金流定投 QQQ。
 
 ## 本地运行
 
-使用仓库现有 CSV 生成报告和静态页面：
+使用 Python 3.13。将 QuantDash Key 写入本地 `api.txt` 或设置 `QUANTDASH_API_KEY`。
 
 ```powershell
-python local_app.py
-```
-
-默认使用 SMA200。也可以临时指定其他周期进行对比，例如：
-
-```powershell
-python local_app.py --sma-window 225
-```
-
-生成后启动本地页面：
-
-```powershell
-python local_app.py --serve
-```
-
-先更新最新行情，再生成和启动：
-
-```powershell
+python -m pip install -r requirements.txt
 python local_app.py --refresh --serve
 ```
 
-浏览器访问 `http://127.0.0.1:8000`。
+浏览器访问 `http://127.0.0.1:8000`。行情缓存放在 `.market-data/`。已有缓存时可以用 `python local_app.py` 离线生成，或通过 `--data-dir` 读取包含 `qqq_daily.csv`、`tqqq_daily.csv`、`bil_daily.csv` 和 `gld_daily.csv` 的目录。`--live-start-date YYYY-MM-DD` 可覆盖起点风险页的自选起点。
 
-QuantDash API Key 可以写入不会提交到 GitHub 的 `api.txt`，也可以设置环境变量：
+`reports/` 包含账户、逐笔交易、每日持仓及收益账本，`public/` 包含可离线使用的交互图和明细页。起点风险页从 2010-03-11 起使用真实 ETF 数据，提供三个独立时段和按季滚动的 1、3、5 年样本。净值与回撤剔除定投资金影响，金额按名义资金单位列示。
 
-```powershell
-$env:QUANTDASH_API_KEY = "你的 API Key"
-```
+## Pages 和每日邮件
 
-行情脚本也可以单独运行：
+`.github/workflows/deploy-pages.yml` 在推送到 `main`、手动触发及美东周一至周五 18:30 的计划任务中刷新四只 ETF，校验共同交易日，生成并发布 Pages。行情缓存留在运行环境。报告通过 Actions artifact 提供给邮件环节。
 
-```powershell
-python get_data.py
-```
+计划任务会在构建和部署后发出提醒。手动触发可用 `send_email` 选项控制发送。成功报告包含 TQQQ、BIL、GLD 的收盘持仓和下次开盘目标、QQQ SMA200 信号、波动率测算日和模拟账本附件。构建失败的消息附有运行记录。
 
-## 详细账本
+GitHub Actions 所需 Secrets：
 
-运行 `python local_app.py` 后，根目录的 `reports` 文件夹会生成：
+- `QUANTDASH_API_KEY`
+- `SMTP_HOST`、`SMTP_PORT`（默认 `465`）、`SMTP_USERNAME`、`SMTP_PASSWORD`
+- `EMAIL_TO`（多个收件人用逗号分隔）、`EMAIL_FROM`（可选，默认发件账号）
 
-| 文件 | 内容 |
-| --- | --- |
-| `summary.json` | 回测日期、最终资产、收益、最大回撤、当前仓位和信号 |
-| `trade_details.csv` | 每笔买卖的信号日、交易日、成交价、股数、佣金、滑点、附加费、现金流和已实现盈亏 |
-| `daily_positions.csv` | 每日现金、股数、平均成本、持仓成本、市值、清算净值、未实现盈亏和仓位比例 |
-| `daily_changes.csv` | QQQ/TQQQ/BIL 每日涨跌、策略每日盈亏、收益率、累计收益、回撤、费用和 QQQ 基准 |
-| `daily_full.csv` | 汇总以上字段的完整每日账本 |
-
-静态网站还会生成三个完整明细页面，并提供 CSV 下载：
-
-- `public/reports/trades.html`
-- `public/reports/positions.html`
-- `public/reports/changes.html`
-
-主页包含一张自包含的 Plotly 账户收益图：展示策略账户、QQQ 基准、累计投入、
-策略买卖点、回撤以及 TQQQ/BIL 仓位。图表支持区间按钮、时间导航条、
-拖动平移、框选缩放、统一悬停和 PNG 导出；
-也可以通过 `public/interactive_market_chart.html` 单独全屏打开。
-
-主页同时包含“起始时间敏感性”分析：从数据可用的首年开始，将资金投入起点
-逐年后移，比较策略与 QQQ 的时间加权年化收益、投入回报、最终资产和最大回撤。
-开始日前的 QQQ 行情只用于 SMA 预热，不会提前投入资金。完整对比结果会写入
-`reports/start_date_sensitivity.csv` 并提供网页下载。
-
-首页的“起始时间风险”入口会打开 `public/start-date-risk.html`。该页面按每月首个
-共同交易日建立一次性投入样本，并使用相同的 1 年、3 年和 5 年持有窗口比较：
-
-- 1 年累计收益，3 年和 5 年年化收益；
-- 历史中位数、10/25 分位、最好和最差结果；
-- 正收益概率、跑赢同期 QQQ 的概率与最大回撤；
-- 当前年度起点相对于等持有时长历史样本的收益百分位；
-- 每个持有窗口最差的 10 个开始日期；
-- 最大回撤的窗口内回本天数与最长水下期；
-- 一次性投入与定投切换，以及定投资金加权收益；
-- 一年收益分布和牛转熊确认期间的 QQQ/TQQQ 跌幅。
-
-完整样本位于 `reports/rolling_start_lump_sum.csv`，汇总位于
-`reports/rolling_start_summary.json`；定投样本位于
-`reports/rolling_start_dca.csv`，牛转熊记录位于
-`reports/regime_transitions.csv`。可以用 `--live-start-date YYYY-MM-DD` 指定实际
-投入日期；未指定时使用最新数据所在年份的第一个共同交易日。
-
-`reports` 和 `public` 都是运行时生成目录，不提交到 Git；GitHub Actions 每次运行时会重新生成。
-
-## GitHub Actions 自动更新
-
-工作流文件是 `.github/workflows/deploy-pages.yml`。
-
-- 推送到 `main`：使用仓库现有 CSV 重新生成并部署；
-- 美东时间周一至周五 18:30：下载最新行情、校验并提交三个 CSV、运行策略、部署 Pages 并发邮件；
-- 手动运行：可以选择是否更新行情、是否发送邮件；
-- 定时任务和手动刷新需要 `QUANTDASH_API_KEY`。
-
-刷新模式会先确认 QQQ、TQQQ 与 BIL 最新交易日一致，并且距离运行日期不超过
-7 天。校验失败时工作流停止，不会发布旧数据；校验成功时，工作流会把
-`qqq_daily.csv`、`tqqq_daily.csv` 和 `bil_daily.csv` 自动提交回 `main`。如果仓库中的数据
-已经是最新交易日，则不会产生空提交。
-
-GitHub Pages 地址：
-
-```text
-https://cjkzbl.github.io/QuantLab/
-```
-
-## 配置每日邮件
-
-邮件使用标准 SMTP 发送，密码和地址全部保存在 GitHub Secrets，不写入代码。
-
-打开：
-
-```text
-GitHub 仓库 → Settings → Secrets and variables → Actions
-```
-
-添加以下 Repository secrets：
-
-| Secret | 含义 | 示例 |
-| --- | --- | --- |
-| `SMTP_HOST` | SMTP 服务器 | `smtp.qq.com` |
-| `SMTP_PORT` | SMTP SSL 端口 | `465` |
-| `SMTP_USERNAME` | 发件邮箱账号 | `name@qq.com` |
-| `SMTP_PASSWORD` | SMTP 授权码或应用密码 | 不要使用网页登录密码 |
-| `EMAIL_FROM` | 发件地址，可省略 | `name@qq.com` |
-| `EMAIL_TO` | 收件地址；多个地址用逗号分隔 | `receiver@example.com` |
-
-常见配置：
-
-- QQ 邮箱：`smtp.qq.com`、端口 `465`，密码填写 QQ 邮箱生成的授权码；
-- Gmail：`smtp.gmail.com`、端口 `465`，密码填写 Google 应用专用密码；
-- 其他邮箱：填写服务商提供的 SMTP SSL 地址、端口和授权码。
-
-邮件包含：
-
-- 本次构建和部署状态；
-- 数据日期、策略资产、QQQ 基准、累计投入；
-- 扣除定投资金影响后的当日策略盈亏和当日收益率；
-- 前一交易日的 QQQ 收盘、SMA200、牛市线、熊市线及 QQQ/TQQQ/BIL 涨跌；
-- 当前牛熊状态、回调买入阈值是否触发和当前仓位；
-- 下一交易日开盘应买入、卖出还是不动，并突出显示判断依据；
-- 上一交易日实际成交动作；
-- 累计收益率、最大回撤、当前仓位和最新信号；
-- 成功构建时附带全部 CSV 账本的 ZIP 压缩包；
-- 本次 GitHub Actions 运行记录链接。
-
-设置完成后，在 Actions 中手动运行一次工作流，并保持：
-
-```text
-refresh = true
-send_email = true
-```
-
-即可同时测试行情刷新、Pages 部署和邮件发送。
+检查邮件排版和附件时使用 `python send_report_email.py --dry-run`。测试入口为 `python -m unittest discover -v`。

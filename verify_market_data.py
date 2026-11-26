@@ -1,27 +1,18 @@
 import argparse
+from pathlib import Path
 
-from get_data import load_data, validate_market_data, validate_treasury_data
+from allocation_strategy import validate_prices
+from get_data import STRATEGY_DATA_DIR, load_strategy_market_data
 
 
 def main():
-    parser = argparse.ArgumentParser(description="校验 QQQ/TQQQ/BIL CSV 是否最新")
+    parser = argparse.ArgumentParser(description="校验 50/50 策略的四只 ETF 行情")
+    parser.add_argument("--data-dir", type=Path, default=STRATEGY_DATA_DIR)
     parser.add_argument("--max-age-days", type=int, default=7)
     args = parser.parse_args()
 
-    result = validate_market_data(
-        load_data("qqq_daily.csv"),
-        load_data("tqqq_daily.csv"),
-        load_data("bil_daily.csv"),
-        max_age_days=args.max_age_days,
-    )
-    result.update(validate_treasury_data(load_data("treasury_3m_daily.csv")))
-    print(
-        "CSV 校验通过："
-        f"最新交易日={result['latest_date']}，"
-        f"距今天={result['age_days']} 天，"
-        f"QQQ={result['qqq_rows']} 行，TQQQ={result['tqqq_rows']} 行，"
-        f"BIL={result['bil_rows']} 行，国债利率={result['treasury_rows']} 行"
-    )
+    prices = validate_prices(load_strategy_market_data(args.data_dir), max_age_days=args.max_age_days)
+    print(f"行情校验通过，最新共同交易日 {prices['QQQ'].index[-1]:%Y-%m-%d}")
 
 
 if __name__ == "__main__":
