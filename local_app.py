@@ -43,7 +43,7 @@ def fmt(value, kind):
 def page(title, body, *, root=""):
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="QuantLab QQQ / TQQQ 50/50 趋势与波动策略历史模拟">
+<meta name="description" content="QuantLab QQQ / TQQQ 50/50 趋势与波动策略历史模拟，防守资金配置 BIL">
 <title>{html.escape(title)} · QuantLab</title><link rel="stylesheet" href="{root}assets/dashboard.css">
 </head><body><header class="topbar"><div class="shell">
   <a class="wordmark" href="{root}index.html">QuantLab</a>
@@ -160,12 +160,12 @@ def dashboard_html(summary, trade_display):
         )
     )
     body = f'''
-<section class="hero"><div><h1>QQQ / TQQQ 50/50</h1><p class="sub">一半按 QQQ 趋势，一半按 TQQQ 波动率。剩余资金平分给 BIL 和 GLD。</p></div>
+<section class="hero"><div><h1>QQQ / TQQQ 50/50</h1><p class="sub">趋势和波动率各占一半，决定 TQQQ 仓位。其余资金全部配置 BIL。</p></div>
 <div class="timestamp">最新共同收盘<strong>{date}</strong></div></section>
 <section class="grid metrics" aria-label="回测指标">{kpis}</section>
 <section class="grid decision" aria-label="下次开盘目标和信号依据">
  <article class="card"><h2>下次开盘目标</h2><p class="target">{s['next_action']}</p>
- <p class="sub">按 {date} 收盘生成。月度新增资金在开盘按已生效的目标配置。</p>
+ <p class="sub">按 {date} 收盘生成。首次跟踪本策略时可用开盘目标核对实际仓位。</p>
  <div class="allocation" aria-hidden="true">{bar}</div>
  <div class="table-wrap"><table><thead><tr><th>ETF</th><th>收盘持仓</th><th>开盘目标</th><th>日涨跌</th></tr></thead><tbody>{weights}</tbody></table></div></article>
  <article class="card"><h2>信号依据</h2><div class="signal-grid">
@@ -180,12 +180,12 @@ def dashboard_html(summary, trade_display):
 <section class="section" id="performance"><div class="section-head"><div><h2>收益、回撤与持仓</h2>
 <p class="sub">{s['start_date']} 至 {date} · 初始和月度投入各 1 万 · 同现金流定投 QQQ 为基准</p></div>
 <a class="button" href="interactive_market_chart.html" target="_blank" rel="noopener">全屏图表</a></div>
-<div class="card chart"><iframe src="interactive_market_chart.html" title="策略净值、账户资产、回撤及 TQQQ、BIL、GLD 权重" loading="lazy"></iframe></div></section>
+<div class="card chart"><iframe src="interactive_market_chart.html" title="策略净值、账户资产、回撤及 TQQQ、BIL 权重" loading="lazy"></iframe></div></section>
 <section class="section"><div class="section-head"><h2>执行规则</h2><a class="button" href="start-date-risk.html">查看不同时期</a></div>
 <div class="grid rules">
  <article class="card"><h3>趋势仓 · 50%</h3><p class="sub">QQQ 收盘高于 SMA200 的 104% 时开启，低于 SMA200 时退出。中间延续状态。</p></article>
  <article class="card"><h3>波动仓 · 50%</h3><p class="sub">每月首个共同交易日收盘更新。TQQQ 的目标比例为 30% 除以近 20 日年化波动率，上限 100%。</p></article>
- <article class="card"><h3>防守与成交</h3><p class="sub">合并两个仓的 TQQQ 权重，剩余平分给 BIL、GLD。目标变化或月度投入时，以开盘价模拟再平衡。</p></article>
+ <article class="card"><h3>防守与成交</h3><p class="sub">合并两个仓的 TQQQ 权重，剩余全部配置 BIL。目标变化或有月度新增资金时，按开盘时已生效的目标模拟再平衡。</p></article>
 </div></section>
 <section class="section"><div class="section-head"><h2>最近模拟成交</h2><a class="button" href="reports/trades.html">完整交易记录</a></div>
 <div class="card">{table(trade_display.tail(8).iloc[::-1], TRADE_COLUMNS[:8])}</div>
@@ -270,7 +270,7 @@ def serve(port, directory=PUBLIC_DIR):
 def main():
     parser = argparse.ArgumentParser(description="QQQ / TQQQ 50/50 组合模拟看板")
     parser.add_argument("--data-dir", type=Path, default=STRATEGY_DATA_DIR)
-    parser.add_argument("--refresh", action="store_true", help="先更新四只 ETF 的复权行情")
+    parser.add_argument("--refresh", action="store_true", help="先更新 QQQ、TQQQ 和 BIL 的复权行情")
     parser.add_argument("--live-start-date", help="起点风险页的自定义起点（YYYY-MM-DD）")
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--port", type=int, default=8000)

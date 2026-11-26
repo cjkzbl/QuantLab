@@ -1,4 +1,4 @@
-name: Publish 50/50 simulation and daily email
+name: Publish 50/50 BIL simulation and daily email
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       send_email:
-        description: Send the 50/50 simulation report email
+        description: Send the 50/50 BIL simulation report email
         required: true
         default: true
         type: boolean
@@ -43,7 +43,7 @@ jobs:
       - name: Test strategy and report generation
         run: python -m unittest discover -v
 
-      - name: Refresh QQQ, TQQQ, BIL and GLD and build dashboard
+      - name: Refresh QQQ, TQQQ and BIL and build dashboard
         env:
           QUANTDASH_API_KEY: ${{ secrets.QUANTDASH_API_KEY }}
         run: |

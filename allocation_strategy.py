@@ -1,4 +1,4 @@
-"""The fixed 50/50 trend and volatility strategy used by Pages and daily email."""
+"""The fixed 50/50 trend and volatility strategy with BIL as the defensive asset."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from risk_analysis import xirr
 from strategy import market_regimes, moving_average
 
 
-STRATEGY_ID = "qqq-tqqq-5050"
+STRATEGY_ID = "qqq-tqqq-5050-bil"
 BACKTEST_START = "2010-03-11"
 CAPITAL = 10_000.0
 SMA_WINDOW = 200
@@ -20,9 +20,9 @@ TREND_SHARE = 0.50
 VOL_WINDOW = 20
 VOL_TARGET = 0.30
 SELL_FEE = 0.0000206
-SYMBOLS = ("QQQ", "TQQQ", "BIL", "GLD")
+SYMBOLS = ("QQQ", "TQQQ", "BIL")
 ASSETS = SYMBOLS[1:]
-SLIPPAGE = {"QQQ": 0.0001, "TQQQ": 0.0005, "BIL": 0.0001, "GLD": 0.0001}
+SLIPPAGE = {"QQQ": 0.0001, "TQQQ": 0.0005, "BIL": 0.0001}
 TREND_LABELS = {"bull": "开启", "bear": "防守", "neutral": "等待确认"}
 
 
@@ -48,7 +48,7 @@ def validate_prices(frames, *, max_age_days=None, today=None):
     common_start = max(frame.index[0] for frame in out.values())
     calendar = out["QQQ"].loc[common_start:].index
     if calendar.empty or any(not frame.loc[common_start:].index.equals(calendar) for frame in out.values()):
-        raise ValueError("QQQ、TQQQ、BIL 和 GLD 的共同交易日不一致")
+        raise ValueError("QQQ、TQQQ 和 BIL 的共同交易日不一致")
     if max_age_days is not None:
         age = (pd.Timestamp(today or date.today()).normalize() - calendar[-1]).days
         if age < 0 or age > max_age_days:
@@ -78,7 +78,7 @@ def prepare_allocation(frames):
     data["volatility_sample_date"] = data.index[sample_index]
     data["signal_tqqq"] = (TREND_SHARE * data.trend_state.eq("bull")
                           + (1 - TREND_SHARE) * data.volatility_tqqq_ratio)
-    data["signal_bil"] = data["signal_gld"] = (1 - data.signal_tqqq) / 2
+    data["signal_bil"] = 1 - data.signal_tqqq
     for symbol, frame in prices.items():
         data[f"{symbol.lower()}_daily_change"] = frame.close.pct_change().reindex(data.index)
     return data
@@ -121,7 +121,7 @@ def backtest_allocation(prepared, start=BACKTEST_START, end=None, *, monthly=CAP
     sale_cost = slip + SELL_FEE * (1 - slip)
     liquidation = 1 - sale_cost
     qqq_exit = (1 - SLIPPAGE["QQQ"]) * (1 - SELL_FEE)
-    target = np.array([0., 1., 0.])
+    target = np.array([0., 1.])
     shares, basis = np.zeros(len(ASSETS)), np.zeros(len(ASSETS))
     qqq_shares = 0.
     previous_value = previous_qqq = CAPITAL

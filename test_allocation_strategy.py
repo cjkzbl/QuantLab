@@ -15,7 +15,7 @@ def sample_prices():
     qqq.loc["2025-01-31"] = 102.
     qqq.loc["2025-02-03"] = 108.
     values = {"QQQ": qqq.to_numpy(), "TQQQ": 70 * np.cumprod(1 + np.tile([-.035, .033, .015], 80)),
-              "BIL": np.full(len(dates), 100.), "GLD": np.full(len(dates), 200.)}
+              "BIL": np.full(len(dates), 100.)}
     return {asset: pd.DataFrame({"trade_date": dates, "open": close, "close": close}) for asset, close in values.items()}
 
 
@@ -29,8 +29,8 @@ class AllocationTests(unittest.TestCase):
         self.assertGreater(daily.loc["2025-01-29", "target_tqqq"], .5)
         self.assertEqual(daily.loc["2025-01-31", "trend_state"], "bear")
         self.assertLess(daily.loc["2025-01-31", "target_tqqq"], .5)
-        self.assertGreater(daily.loc["2025-01-31", "target_gld"], .25)
-        self.assertEqual(daily.loc["2025-01-31", "target_gld"], daily.loc["2025-01-31", "target_bil"])
+        np.testing.assert_allclose(daily.target_bil, 1 - daily.target_tqqq)
+        self.assertEqual(set(trades.asset), {"TQQQ", "BIL"})
         self.assertTrue((trades.dropna(subset=["signal_date"]).signal_date < trades.dropna(subset=["signal_date"]).trade_date).all())
 
     def test_first_monthly_deposit_executes_the_previous_close_plan(self):
@@ -58,11 +58,11 @@ class AllocationTests(unittest.TestCase):
 
     def test_missing_session_and_invalid_price_stop_publication(self):
         prices = sample_prices()
-        prices["GLD"] = prices["GLD"].drop(index=80)
+        prices["BIL"] = prices["BIL"].drop(index=80)
         with self.assertRaisesRegex(ValueError, "共同交易日"):
             validate_prices(prices)
         prices = sample_prices()
-        prices["GLD"].loc[10, "close"] = np.inf
+        prices["BIL"].loc[10, "close"] = np.inf
         with self.assertRaisesRegex(ValueError, "开盘／收盘价"):
             validate_prices(prices)
 

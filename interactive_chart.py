@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-ASSET_COLORS = {"TQQQ": "#62d9c2", "BIL": "#73aafa", "GLD": "#e7b96f"}
+ASSET_COLORS = {"TQQQ": "#62d9c2", "BIL": "#73aafa"}
 
 
 def build_interactive_market_chart(daily, filename="public/interactive_market_chart.html"):
@@ -64,6 +64,6 @@ def build_interactive_market_chart(daily, filename="public/interactive_market_ch
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>50/50 策略收益与持仓</title><style>body{{margin:0;background:#101b2a}}</style>
+<title>50/50 策略收益与持仓 · BIL 防守</title><style>body{{margin:0;background:#101b2a}}</style>
 <body>{html}</body></html>''', encoding="utf-8")
     return path

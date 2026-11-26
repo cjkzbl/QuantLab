@@ -12,7 +12,8 @@ from email.message import EmailMessage
 from pathlib import Path
 
 
-ASSETS = ("TQQQ", "BIL", "GLD")
+ASSETS = ("TQQQ", "BIL")
+SUBJECT_PREFIX = "[QuantLab 50/50 BIL]"
 SITE = "https://cjkzbl.github.io/QuantLab/"
 ATTACHMENTS = ("summary.json", "trade_details.csv", "daily_positions.csv", "daily_changes.csv", "daily_full.csv")
 
@@ -29,7 +30,7 @@ def load_summary(report_dir):
     if not file.is_file():
         return None
     data = json.loads(file.read_text(encoding="utf-8"))
-    return data if data.get("strategy_id") == "qqq-tqqq-5050" else None
+    return data if data.get("strategy_id") == "qqq-tqqq-5050-bil" else None
 
 
 def zip_reports(report_dir):
@@ -60,7 +61,7 @@ def build_message(report_dir, sender, recipients, *, build_result, deploy_result
     if summary:
         date = summary["end_date"]
         action = summary["next_action"]
-        message["Subject"] = f"[QuantLab 50/50] {date} · {action}"
+        message["Subject"] = f"{SUBJECT_PREFIX} {date} · {action}"
         lines.extend([f"最新共同收盘：{date}", f"下一交易日开盘：{action}", "", "标的 | 收盘持仓 | 开盘目标 | 日涨跌"])
         for asset in ASSETS:
             current = value(summary["current_weights"][asset], ".2%")
@@ -72,6 +73,7 @@ def build_message(report_dir, sender, recipients, *, build_result, deploy_result
                 f'<td align="right">{current}</td><td align="right"><strong>{target}</strong></td><td align="right">{change}</td></tr>'
             )
         signal_details = [
+            "趋势与波动各占一半，TQQQ 之外的资金全部配置 BIL。首次跟踪本策略时可用开盘目标核对实际仓位。",
             f"趋势仓 {summary['trend_label']}，QQQ 后复权收盘 {value(summary['qqq_close'], ',.2f')}"
             f"（{value(summary['latest_changes']['QQQ'], '+.2%')}）",
             f"趋势开启线 {value(summary['qqq_entry_line'], ',.2f')}，退出线 {value(summary['qqq_sma'], ',.2f')}",
@@ -85,8 +87,8 @@ def build_message(report_dir, sender, recipients, *, build_result, deploy_result
         lines.extend(["", *signal_details])
         intro = f"{date} 收盘 · {action}"
     else:
-        message["Subject"] = "[QuantLab 50/50] 本次报告不可用"
-        intro = "本次缺少可用的 50/50 报告，请查看运行记录。"
+        message["Subject"] = f"{SUBJECT_PREFIX} 本次报告不可用"
+        intro = "本次缺少可用的 BIL 防守版报告，请查看运行记录。"
         lines.append(intro)
 
     links = [("策略看板", SITE)]
@@ -102,7 +104,7 @@ def build_message(report_dir, sender, recipients, *, build_result, deploy_result
     message.add_alternative(f'''<!doctype html><html lang="zh-CN"><meta charset="UTF-8">
 <body style="background:#eef3f7;color:#172a3a;font-family:Arial,'Microsoft YaHei',sans-serif;margin:0;padding:16px">
 <div style="max-width:650px;margin:auto;background:#fff;border-radius:14px;padding:20px">
-<div style="font-size:13px;color:#526779">QuantLab · 50/50 趋势与波动 · {html.escape(status)}</div>
+<div style="font-size:13px;color:#526779">QuantLab · 50/50 趋势与波动 · BIL 防守 · {html.escape(status)}</div>
 <h2 style="font-size:21px;margin:10px 0 16px">{html.escape(intro)}</h2>
 {allocation}<div style="font-size:14px;line-height:1.5;margin-top:14px">{details}</div>
 <div style="margin-top:16px;font-size:13px">{link_html}</div></div></body></html>''', subtype="html")

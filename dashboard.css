@@ -8,7 +8,6 @@
   --muted: #a0b2c7;
   --teal: #62d9c2;
   --blue: #73aafa;
-  --gold: #e7b96f;
   --loss: #ffa59c;
   font-family: Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
 }
@@ -49,10 +48,8 @@ h3 { font-size: 1rem; }
 .allocation span { display: block; }
 .tqqq { color: var(--teal); }
 .bil { color: var(--blue); }
-.gld { color: var(--gold); }
 .allocation span.tqqq { background: var(--teal); }
 .allocation span.bil { background: var(--blue); }
-.allocation span.gld { background: var(--gold); }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: .86rem; }
 th, td { padding: 9px 10px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
