@@ -61,8 +61,58 @@ tr:last-child td { border-bottom: none; }
 .signal-grid { display: grid; grid-template-columns: 1fr 1fr; margin: 9px 0 14px; gap: 10px 14px; }
 .signal-grid strong { color: var(--text); font-size: .9rem; }
 .card .note { margin-top: 8px; }
-.chart { padding: 0; overflow: hidden; }
-.chart iframe { display: block; width: 100%; height: 864px; border: none; }
+.daily-comparison {
+  --comparison-control-height: 36px;
+  min-width: 0;
+}
+.daily-comparison-controls, .daily-comparison-day {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+.daily-comparison .button, .daily-comparison input {
+  min-height: var(--comparison-control-height);
+  font-family: inherit;
+  font-size: .84rem;
+}
+.daily-comparison button.button {
+  background: var(--surface);
+  cursor: pointer;
+}
+.daily-comparison button.button:hover, .daily-comparison .button[aria-pressed="true"] {
+  background: var(--raised);
+}
+.daily-comparison .button[aria-pressed="true"] { border-color: var(--teal); }
+.daily-comparison .button:disabled { cursor: default; opacity: .55; }
+.daily-comparison :is(.button, input):focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.daily-comparison-plot { width: 100%; min-width: 0; height: 522px; margin-top: 5px; }
+.daily-comparison-day label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: .83rem;
+}
+.daily-comparison-day input {
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--text);
+}
+.daily-comparison-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 248px), 1fr));
+  gap: 10px 14px;
+  padding-top: 10px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: .81rem;
+  font-variant-numeric: tabular-nums;
+}
+.daily-comparison-values strong { display: block; font-weight: 600; }
+.daily-comparison-values span { color: var(--muted); }
 .rules { grid-template-columns: repeat(3, 1fr); }
 .rules p { margin-top: 7px; }
 .downloads { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 0; }
@@ -85,6 +135,7 @@ tr:last-child td { border-bottom: none; }
   .timestamp { text-align: left; }
   .timestamp strong { display: inline; padding-left: 6px; }
   .card { padding: 13px; }
-  .chart { padding: 0; }
+  .daily-comparison-plot { height: 446px; }
+  .daily-comparison-day input { font-size: 1rem; }
   th, td { padding: 8px 6px; }
 }

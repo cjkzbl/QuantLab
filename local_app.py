@@ -9,6 +9,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pandas as pd
+from plotly.offline import get_plotlyjs
 
 from allocation_strategy import (
     ASSETS, BACKTEST_START, CAPITAL, SYMBOLS, backtest_allocation,
@@ -21,6 +22,7 @@ from interactive_chart import build_interactive_market_chart
 PUBLIC_DIR = Path("public")
 REPORT_DIR = Path("reports")
 SOURCE_CSS = Path(__file__).with_name("dashboard.css")
+SOURCE_COMPARISON_JS = Path(__file__).with_name("daily_comparison.js")
 ACTION_LABELS = {"initial": "初始投入", "signal": "目标变动", "funding": "月度投入", "signal_and_funding": "目标变动与月度投入"}
 
 
@@ -47,7 +49,7 @@ def page(title, body, *, root=""):
 <title>{html.escape(title)} · QuantLab</title><link rel="stylesheet" href="{root}assets/dashboard.css">
 </head><body><header class="topbar"><div class="shell">
   <a class="wordmark" href="{root}index.html">QuantLab</a>
-  <nav aria-label="主导航"><a href="{root}index.html">策略概览</a><a href="{root}start-date-risk.html">起点风险</a><a href="{root}reports/trades.html">交易明细</a></nav>
+  <nav aria-label="主导航"><a href="{root}index.html">策略概览</a><a href="{root}index.html#performance">逐日对比</a><a href="{root}start-date-risk.html">起点风险</a><a href="{root}reports/trades.html">交易明细</a></nav>
 </div></header><main class="shell">{body}
 <footer class="footer">QuantLab · 历史模拟。金额均按名义账户单位列示。</footer></main></body></html>'''
 
@@ -135,7 +137,19 @@ def risk_reports(prepared, live_start_date):
     return current, pd.DataFrame(phase), pd.DataFrame(yearly), roll, summaries
 
 
-def dashboard_html(summary, trade_display):
+def daily_comparison_rows(prepared, daily):
+    cleared = prepared.assign(signal_tqqq=prepared.signal_tqqq.where(prepared.trend_state.eq("bull"), 0.0))
+    cleared["signal_bil"] = 1.0 - cleared.signal_tqqq
+    alternative, _ = backtest_allocation(cleared, daily.trade_date.iloc[0], daily.trade_date.iloc[-1], ledger=False)
+    dates = daily.trade_date.dt.strftime("%Y-%m-%d")
+    series = [dates]
+    for metric in ("nav", "drawdown", "daily_return"):
+        series.extend([daily[metric], alternative[metric], daily[f"qqq_benchmark_{metric}"]])
+    observations = pd.concat(series, axis=1).round(8)
+    return list(observations.itertuples(index=False, name=None))
+
+
+def dashboard_html(summary, trade_display, comparison_rows):
     s = summary
     money = lambda value: f"{value / 10_000:,.2f} 万"
     annualized = fmt(s["annualized_return"], "percent")
@@ -159,6 +173,7 @@ def dashboard_html(summary, trade_display):
             ("最新一日收益", fmt(change, "signed"), change_color, f'剔除投入的盈亏 {fmt(s["latest_daily_profit"], "money")}'),
         )
     )
+    comparison = json.dumps(comparison_rows, separators=(",", ":"), allow_nan=False)
     body = f'''
 <section class="hero"><div><h1>QQQ / TQQQ 50/50</h1><p class="sub">趋势和波动率各占一半，决定 TQQQ 仓位。其余资金全部配置 BIL。</p></div>
 <div class="timestamp">最新共同收盘<strong>{date}</strong></div></section>
@@ -177,10 +192,28 @@ def dashboard_html(summary, trade_display):
  <div><span class="label">波动仓内 TQQQ 比例</span><strong>{fmt(s['volatility_tqqq_ratio'],'percent')}</strong></div>
  </div><p class="note">波动率取自 {s['volatility_sample_date']} 收盘。价格和均线采用后复权口径，收盘持仓权重随价格浮动。</p></article>
 </section>
-<section class="section" id="performance"><div class="section-head"><div><h2>收益、回撤与持仓</h2>
-<p class="sub">{s['start_date']} 至 {date} · 初始和月度投入各 1 万 · 同现金流定投 QQQ 为基准</p></div>
-<a class="button" href="interactive_market_chart.html" target="_blank" rel="noopener">全屏图表</a></div>
-<div class="card chart"><iframe src="interactive_market_chart.html" title="策略净值、账户资产、回撤及 TQQQ、BIL 权重" loading="lazy"></iframe></div></section>
+<section class="section" id="performance"><div class="section-head"><div><h2>逐日收益与回撤对比</h2>
+<p class="sub">{s['start_date']} 至 {date} · {len(comparison_rows):,} 个交易日 · 同日同额定投 QQQ</p></div>
+<a class="button" href="interactive_market_chart.html" target="_blank" rel="noopener">账户资产与持仓</a></div>
+<div class="card daily-comparison" data-daily-comparison>
+ <div class="daily-comparison-controls" role="group" aria-label="显示区间">
+  <button class="button" type="button" data-months="1" aria-pressed="false">近 1 月</button>
+  <button class="button" type="button" data-months="3" aria-pressed="true">近 3 月</button>
+  <button class="button" type="button" data-months="12" aria-pressed="false">近 1 年</button>
+  <button class="button" type="button" data-months="all" aria-pressed="false">全期</button>
+ </div>
+ <div class="daily-comparison-plot" data-chart role="region" aria-label="现行策略、防守清零和定投 QQQ 的累计净值与每日回撤"></div>
+ <p class="note" data-chart-status role="status">正在加载逐日曲线…</p>
+ <div class="daily-comparison-day">
+  <label>交易日 <input type="date" data-day min="{s['start_date']}" max="{date}" value="{date}"></label>
+  <button class="button" type="button" data-step="-1">前一交易日</button>
+  <button class="button" type="button" data-step="1" disabled>后一交易日</button>
+ </div>
+ <div class="daily-comparison-values" data-readout aria-live="polite"></div>
+ <p class="note">净值以 1 为起点，日收益剔除入金的直接影响。防守清零版在趋势仓关闭时全部持有 BIL。</p>
+ <script type="application/json" data-observations>{comparison}</script>
+</div></section>
+<script src="assets/plotly.min.js" defer></script><script src="assets/daily-comparison.js" defer></script>
 <section class="section"><div class="section-head"><h2>执行规则</h2><a class="button" href="start-date-risk.html">查看不同时期</a></div>
 <div class="grid rules">
  <article class="card"><h3>趋势仓 · 50%</h3><p class="sub">QQQ 收盘高于 SMA200 的 104% 时开启，低于 SMA200 时退出。中间延续状态。</p></article>
@@ -226,6 +259,8 @@ def build_dashboard(data_dir=STRATEGY_DATA_DIR, live_start_date=None, *, public_
     report_dir.mkdir(parents=True, exist_ok=True)
     (public_dir / "assets").mkdir(exist_ok=True)
     shutil.copyfile(SOURCE_CSS, public_dir / "assets/dashboard.css")
+    shutil.copyfile(SOURCE_COMPARISON_JS, public_dir / "assets/daily-comparison.js")
+    (public_dir / "assets/plotly.min.js").write_text(get_plotlyjs(), encoding="utf-8")
     (public_dir / ".nojekyll").touch()
 
     positions = daily[[column for column, _, _ in POSITION_COLUMNS]]
@@ -253,7 +288,7 @@ def build_dashboard(data_dir=STRATEGY_DATA_DIR, live_start_date=None, *, public_
     build_interactive_market_chart(daily, public_dir / "interactive_market_chart.html")
     (public_dir / "start-date-risk.html").write_text(risk_html(current, phase, yearly, roll, risk_summary), encoding="utf-8")
     index = public_dir / "index.html"
-    index.write_text(dashboard_html(summary, display), encoding="utf-8")
+    index.write_text(dashboard_html(summary, display, daily_comparison_rows(prepared, daily)), encoding="utf-8")
     return index, summary
 
 
