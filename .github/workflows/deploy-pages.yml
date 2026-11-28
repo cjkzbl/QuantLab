@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       send_email:
-        description: Send the 50/50 BIL simulation report email
+        description: Send the 50/50 BIL target allocation email
         required: true
         default: true
         type: boolean
@@ -64,11 +64,11 @@ jobs:
         with:
           path: public
 
-      - name: Upload detailed reports for email
+      - name: Upload strategy summary for email
         uses: actions/upload-artifact@v4
         with:
-          name: daily-simulation-report
-          path: reports
+          name: daily-target-summary
+          path: reports/summary.json
           if-no-files-found: error
           retention-days: 14
 
@@ -98,12 +98,12 @@ jobs:
         with:
           python-version-file: .python-version
 
-      - name: Download detailed reports
+      - name: Download strategy summary
         if: ${{ needs.build.result == 'success' }}
         continue-on-error: true
         uses: actions/download-artifact@v5
         with:
-          name: daily-simulation-report
+          name: daily-target-summary
           path: notification-report
 
       - name: Send daily result email

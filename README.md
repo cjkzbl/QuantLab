@@ -24,9 +24,9 @@ python local_app.py --refresh --serve
 
 ## Pages 和每日邮件
 
-`.github/workflows/deploy-pages.yml` 在推送到 `main`、手动触发及美东周一至周五 18:30 的计划任务中刷新 QQQ、TQQQ 和 BIL，校验共同交易日，生成并发布 Pages。行情缓存留在运行环境。报告通过 Actions artifact 提供给邮件环节。
+`.github/workflows/deploy-pages.yml` 在推送到 `main`、手动触发及美东周一至周五 18:30 的计划任务中刷新 QQQ、TQQQ 和 BIL，校验共同交易日，生成并发布 Pages。行情缓存留在运行环境。目标仓位摘要通过 Actions artifact 提供给邮件环节。
 
-计划任务会在构建和部署后发出提醒。手动触发可用 `send_email` 选项控制发送。成功报告包含 TQQQ 和 BIL 的收盘持仓和下次开盘目标、QQQ SMA200 信号、波动率测算日和模拟账本附件。构建失败的消息附有运行记录。
+计划任务会在构建和部署后发出提醒。手动触发可用 `send_email` 选项控制发送。邮件给出 TQQQ 和 BIL 的下次开盘目标比例、操作及收盘信号日期。构建失败的消息附有运行记录。
 
 GitHub Actions 所需 Secrets：
 
@@ -34,4 +34,4 @@ GitHub Actions 所需 Secrets：
 - `SMTP_HOST`、`SMTP_PORT`（默认 `465`）、`SMTP_USERNAME`、`SMTP_PASSWORD`
 - `EMAIL_TO`（多个收件人用逗号分隔）、`EMAIL_FROM`（可选，默认发件账号）
 
-检查邮件排版和附件时使用 `python send_report_email.py --dry-run`。测试入口为 `python -m unittest discover -v`。
+检查邮件内容时使用 `python send_report_email.py --dry-run`。测试入口为 `python -m unittest discover -v`。
